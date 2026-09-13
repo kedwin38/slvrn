@@ -1,0 +1,5 @@
+# Single-page application: every unmatched path renders the shell, which reads the hash
+# route. The API is proxied so the browser sees one origin and no CORS preflight on the
+# payment paths.
+/api/*  https://api.solvaren.co.ke/:splat  200
+/*      /index.html                        200

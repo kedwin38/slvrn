@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+
+    <title>SOLVAREN Payment Solutions — Move money with certainty</title>
+    <meta
+      name="description"
+      content="SOLVAREN is a security-first business disbursement control plane for M-PESA. Controlled payment release, full transaction-outcome visibility, and auditable financial execution."
+    />
+
+    <!--
+      The application itself is behind authentication and must never be indexed: it is a
+      payment console. The marketing pages under /about are separately rendered and carry
+      their own indexable metadata.
+    -->
+    <meta name="robots" content="noindex, nofollow" />
+    <meta name="referrer" content="no-referrer" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="theme-color" content="#f7f8fa" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#141a24" media="(prefers-color-scheme: dark)" />
+
+    <!--
+      A restrictive Content-Security-Policy. The console handles payment authorization, so
+      an injected script must have nowhere to load from and nowhere to send data.
+
+      `frame-ancestors` is deliberately absent here: it is ignored when delivered via a
+      <meta> element. It is set as a response header in public/_headers, alongside
+      X-Frame-Options for older agents.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; form-action 'none'; base-uri 'none'; object-src 'none'"
+    />
+
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/icon-180.png" />
+  </head>
+  <body>
+    <div id="root"></div>
+    <noscript>
+      <div style="padding: 2rem; font-family: system-ui, sans-serif; max-width: 46ch; margin: 0 auto">
+        <h1 style="font-size: 1.2rem">JavaScript is required</h1>
+        <p>
+          SOLVAREN uses cryptographic security keys for payment authorization, which require
+          JavaScript. Enable it for this site to continue.
+        </p>
+      </div>
+    </noscript>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
