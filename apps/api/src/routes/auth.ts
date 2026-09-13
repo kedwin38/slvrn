@@ -70,7 +70,7 @@ authRoutes.post('/login', async (c) => {
   const correlationId = c.get('correlationId');
   const security = c.get('securityContext');
 
-  const result = await withConnection(c.env, c.executionCtx, async (sql) => {
+  const result = await withConnection(c.env, async (sql) => {
     let stage;
     try {
       stage = await verifyPasswordStage(sql, {
@@ -200,7 +200,7 @@ authRoutes.post('/webauthn/authenticate', async (c) => {
   const correlationId = c.get('correlationId');
   const security = c.get('securityContext');
 
-  const result = await withConnection(c.env, c.executionCtx, async (sql) => {
+  const result = await withConnection(c.env, async (sql) => {
     const events = await sql<
       {
         id: string;
@@ -390,7 +390,7 @@ authRoutes.post('/webauthn/authenticate', async (c) => {
 authRoutes.post('/webauthn/register/options', requireAuth, async (c) => {
   const actor = actorOf(c);
 
-  const options = await withConnection(c.env, c.executionCtx, async (sql) => {
+  const options = await withConnection(c.env, async (sql) => {
     const existing = await sql<{ credential_id: string }[]>`
       SELECT credential_id FROM webauthn_credentials WHERE user_id = ${actor.userId} AND status = 'ACTIVE'
     `;
@@ -430,7 +430,7 @@ authRoutes.post('/webauthn/register', requireAuth, async (c) => {
     .parse(await c.req.json());
   const correlationId = c.get('correlationId');
 
-  const result = await withConnection(c.env, c.executionCtx, async (sql) => {
+  const result = await withConnection(c.env, async (sql) => {
     const events = await sql<{ detail: { challenge: string } }[]>`
       SELECT detail FROM security_events
        WHERE user_id = ${actor.userId} AND event_type = 'WEBAUTHN_REGISTRATION_STARTED'
@@ -512,7 +512,7 @@ authRoutes.post('/authorization-pin', requireAuth, async (c) => {
 
   assertPinShape(body.pin);
 
-  await withConnection(c.env, c.executionCtx, async (sql) => {
+  await withConnection(c.env, async (sql) => {
     const users = await sql<{ password_hash: string }[]>`
       SELECT password_hash FROM users WHERE id = ${actor.userId} LIMIT 1
     `;
@@ -552,7 +552,7 @@ authRoutes.post('/recovery-codes', requireAuth, async (c) => {
   const body = z.object({ currentPassword: z.string().min(1).max(1024) }).parse(await c.req.json());
   const correlationId = c.get('correlationId');
 
-  const codes = await withConnection(c.env, c.executionCtx, async (sql) => {
+  const codes = await withConnection(c.env, async (sql) => {
     const users = await sql<{ password_hash: string }[]>`
       SELECT password_hash FROM users WHERE id = ${actor.userId} LIMIT 1
     `;
@@ -626,7 +626,7 @@ authRoutes.post('/logout', requireAuth, async (c) => {
   const actor = actorOf(c);
   const correlationId = c.get('correlationId');
 
-  await withConnection(c.env, c.executionCtx, async (sql) => {
+  await withConnection(c.env, async (sql) => {
     await revokeSession(sql, actor.sessionId, 'User signed out');
     await inTransaction(sql, (tx) =>
       writeAuditEvent(tx, {
@@ -653,7 +653,7 @@ authRoutes.post('/logout-all', requireAuth, async (c) => {
   const actor = actorOf(c);
   const correlationId = c.get('correlationId');
 
-  const revoked = await withConnection(c.env, c.executionCtx, async (sql) => {
+  const revoked = await withConnection(c.env, async (sql) => {
     const count = await revokeAllSessions(sql, actor.userId, 'User revoked all sessions');
     await inTransaction(sql, (tx) =>
       writeAuditEvent(tx, {

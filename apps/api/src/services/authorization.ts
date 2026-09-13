@@ -515,9 +515,19 @@ export async function releaseBatch(input: ReleaseInput): Promise<ReleaseResult> 
        WHERE id = ${batch.id}
     `;
 
-    // ---- Claim idempotency for every instruction ------------------------
-    // Claimed inside this transaction, so a queue redelivery cannot produce a second claim
-    // and therefore cannot produce a second payment.
+    // ---- Claim idempotency and enqueue execution ------------------------
+    //
+    // Both happen inside this transaction, which is the single most important consequence
+    // of backing the queue with PostgreSQL.
+    //
+    // The claim has always been made here, so that a redelivery cannot produce a second
+    // claim and therefore cannot produce a second payment. What could not be done before
+    // was enqueueing here: the queue was a separate system, so the release committed and
+    // *then* the messages were sent. A process that died in between left a batch marked
+    // authorized, with idempotency claims, and no messages — a payroll that silently never
+    // ran, and one that could not simply be re-released because the claims already existed.
+    //
+    // Now the claim and the job that consumes it commit together, or neither does.
     const instructions = await tx<
       { id: string; recipient_id: string; msisdn_snapshot: string; amount_cents: string }[]
     >`
@@ -542,6 +552,25 @@ export async function releaseBatch(input: ReleaseInput): Promise<ReleaseResult> 
         VALUES (${fingerprint}, ${actor.organizationId}, ${instruction.id}, 'CLAIMED')
         ON CONFLICT (fingerprint) DO NOTHING
       `;
+
+      await input.env.queue.send(
+        {
+          queue: 'payments',
+          body: {
+            type: 'EXECUTE_INSTRUCTION',
+            organizationId: actor.organizationId,
+            batchId: batch.id,
+            instructionId: instruction.id,
+            batchVersion: batch.version,
+            manifestHash: currentManifest.manifestHash,
+            fingerprint,
+            challengeId: stored.id,
+            correlationId,
+            attempt: 0,
+          },
+        },
+        tx,
+      );
     }
 
     await writeAuditEvent(tx, {
@@ -571,6 +600,15 @@ export async function releaseBatch(input: ReleaseInput): Promise<ReleaseResult> 
         approvedBy: batch.approved_by_user_id,
       },
     });
+
+    // The jobs are committed by this same transaction, so QUEUED is now an honest
+    // description of the batch rather than a hope. Written after the audit event so the
+    // event still records the AUTHORIZED transition it describes.
+    await tx`
+      UPDATE payment_batches
+         SET state = 'QUEUED'
+       WHERE id = ${batch.id} AND state = 'AUTHORIZED'
+    `;
 
     return {
       batchId: batch.id,

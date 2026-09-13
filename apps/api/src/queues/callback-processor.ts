@@ -23,14 +23,13 @@ import { withConnection, inTransaction, requireLock, type Sql } from '../db/clie
 import { writeAuditEvent } from '../db/audit-writer.js';
 import { loadFailureOverrides } from '../services/failure-map.js';
 import { maybeSettleBatch } from './payment-executor.js';
-import type { CallbackQueueMessage, Env } from '../env.js';
+import type { CallbackQueueMessage, Env, QueueBatch } from '../env.js';
 
 export async function handleCallbackBatch(
-  batch: MessageBatch<CallbackQueueMessage>,
+  batch: QueueBatch<CallbackQueueMessage>,
   env: Env,
-  ctx: ExecutionContext,
 ): Promise<void> {
-  await withConnection(env, ctx, async (sql) => {
+  await withConnection(env, async (sql) => {
     for (const message of batch.messages) {
       try {
         await processCallback(sql, env, message.body);

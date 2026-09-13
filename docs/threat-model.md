@@ -130,8 +130,11 @@ contradicting callback does not rewrite a settled transaction).
 3. A callback that matches no transaction is retained as evidence and marked `UNMATCHED`.
    **It never creates a transaction**, so the endpoint cannot be used to invent a payment.
 4. Identical payloads are deduplicated by content digest before they are enqueued.
-5. Cloudflare WAF restricts the route to Safaricom's ranges where they are known, and
-   enforces method, content type and body size.
+5. The application enforces method, content type and body size before parsing.
+   **There is no longer an IP allowlist for Safaricom's ranges**: that was a Cloudflare WAF
+   rule, and the Railway deployment has no edge. Layers 1–4 are unchanged and are what the
+   endpoint's safety actually rests on; the allowlist was defence in depth, and its loss is
+   the reason to put a proxy in front of the API in production.
 
 **Residual risk.** An attacker who obtains the shared secret _and_ a valid
 `OriginatorConversationID` for an in-flight payment could settle it early with a forged
@@ -150,18 +153,19 @@ shortcode, bypassing SOLVAREN entirely.
 
 **Why it fails.** No code path returns a plaintext Daraja secret to any caller at any
 authority level — spec §4.4 forbids it even to L3, and the configuration API deals only in
-masked views. Secrets are AES-GCM envelope-encrypted _before_ leaving the Worker and stored
+masked views. Secrets are AES-GCM envelope-encrypted _before_ leaving the process and stored
 by reference; the database holds binding names and four characters of the _public_ consumer
 key. The initiator password is never persisted: it is encrypted once against the M-PESA
 certificate and discarded, and an organisation may supply a pre-computed credential
 instead so SOLVAREN never sees it.
 
-Compromising the storage alone yields nothing: `SECRET_ENCRYPTION_KEY` is a separate Worker
-binding.
+Compromising the object storage alone yields nothing: `SECRET_ENCRYPTION_KEY` is a separate
+environment variable, held by Railway and never written to the bucket it protects. The
+storage credential is likewise scoped to one bucket and four operations.
 
 **Verified by** `routes.test.ts` (a seeded secret never appears in any response),
 `check-invariants.sh` (no credential-shaped string in the repository; no secret assigned a
-value in `wrangler.toml`), `crypto.test.ts` (envelope integrity and tamper detection).
+value in a deployment manifest), `crypto.test.ts` (envelope integrity and tamper detection).
 
 ---
 
@@ -178,7 +182,7 @@ moved without a record.
 
 **Residual risk.** A database superuser can disable the triggers. The chain makes the
 resulting gap detectable, which is the property an auditor needs; the deployment guide
-requires the application role not to own the tables, so the Workers cannot do it.
+requires the application role not to own the tables, so the application cannot do it.
 
 **Verified by** `governance.test.ts` (alteration, deletion and reordering each localised),
 `db/tests/immutability.sql`, `integration.test.ts` (chain verifies after a real release),
@@ -191,7 +195,7 @@ requires the application role not to own the tables, so the Workers cannot do it
 **Attack.** Use a compromised session to enumerate the ledger.
 
 **Why it fails, partially.** Every export is role-scoped by organisation policy and audited
-with actor, filter and row count. Exports are rate-limited at the edge. Explorer pages are
+with actor, filter and row count. Exports are rate-limited in the application. Explorer pages are
 capped at 200 rows and exports at the organisation's configured limit. Recipient numbers are
 masked in list views.
 
@@ -203,15 +207,15 @@ audit record naming who took what.
 
 ## 8. Denial of service
 
-| Vector                    | Control                                                                            |
-| ------------------------- | ---------------------------------------------------------------------------------- |
-| Volumetric                | Cloudflare edge                                                                    |
-| Credential stuffing       | Ten sign-in attempts per minute per IP at the edge; five failures lock the account |
-| Export flooding           | Twenty per five minutes; row caps                                                  |
-| Expensive queries         | Server-side pagination; an index per sort column; 10-second statement timeout      |
-| Oversized bodies          | Checked before parsing; 8 MB for CSV, 64 KB for callbacks, 16 KB for auth          |
-| Memory-hard hashing abuse | Password length bounded before Argon2 is invoked                                   |
-| Provider rate limits      | Durable Object token bucket, aligned to the Daraja contract                        |
+| Vector                    | Control                                                                                    |
+| ------------------------- | ------------------------------------------------------------------------------------------ |
+| Volumetric                | **Not defended.** No edge, no WAF, no managed DDoS since the move off Cloudflare           |
+| Credential stuffing       | Ten sign-in attempts per minute per IP, in the application; five failures lock the account |
+| Export flooding           | Twenty per five minutes; row caps                                                          |
+| Expensive queries         | Server-side pagination; an index per sort column; 10-second statement timeout              |
+| Oversized bodies          | Checked before parsing; 8 MB for CSV, 64 KB for callbacks, 16 KB for auth                  |
+| Memory-hard hashing abuse | Password length bounded before Argon2 is invoked                                           |
+| Provider rate limits      | PostgreSQL token bucket, aligned to the Daraja contract, correct across replicas           |
 
 ---
 
@@ -219,9 +223,16 @@ audit record naming who took what.
 
 Stated rather than implied.
 
-**A compromised Cloudflare account.** Whoever controls the Worker controls the application.
-Mitigations are organisational: scoped API tokens, hardware MFA on the account, and the
-audit chain as the detective control.
+**A compromised Railway account.** Whoever controls the project controls the application
+and its environment variables, which is to say every secret. Mitigations are
+organisational: hardware MFA on the account, scoped deploy tokens, and the audit chain as
+the detective control.
+
+**Volumetric denial of service.** Stated plainly because it changed: the Cloudflare
+deployment inherited DDoS protection and a WAF at the edge, and the Railway one has
+neither. Everything in the table above is application-level, which means an attacker can
+exhaust the service before any of it applies. Putting a proxy in front of the API restores
+this; until that is done, it is an accepted gap rather than a covered one.
 
 **A malicious database superuser.** They can disable the immutability triggers. The chain
 makes it detectable; nothing in software makes it impossible.

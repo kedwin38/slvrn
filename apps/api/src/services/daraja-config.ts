@@ -128,25 +128,26 @@ export interface SecretStore {
 /**
  * R2-backed secret store.
  *
- * Values are AES-GCM envelopes encrypted under `SECRET_ENCRYPTION_KEY`, which lives in the
- * Worker's own secret bindings. Compromising the bucket alone yields nothing usable; the
- * master key is required, and it is never stored alongside the data it protects.
+ * Values are AES-GCM envelopes encrypted under `SECRET_ENCRYPTION_KEY`, which is a process
+ * environment variable, not an object in this bucket. Compromising the bucket alone yields
+ * nothing usable; the master key is required, and it is never stored alongside the data it
+ * protects.
  */
 export function createSecretStore(env: Env): SecretStore {
   const prefix = 'secrets/';
   return {
     async put(reference, envelope) {
-      await env.ARTIFACTS.put(`${prefix}${reference}`, envelope, {
-        httpMetadata: { cacheControl: 'no-store' },
-        customMetadata: { kind: 'solvaren-secret-envelope' },
+      await env.objects.put(`${prefix}${reference}`, envelope, {
+        contentType: 'application/octet-stream',
+        metadata: { kind: 'solvaren-secret-envelope' },
       });
     },
     async get(reference) {
-      const object = await env.ARTIFACTS.get(`${prefix}${reference}`);
+      const object = await env.objects.get(`${prefix}${reference}`);
       return object ? object.text() : null;
     },
     async delete(reference) {
-      await env.ARTIFACTS.delete(`${prefix}${reference}`);
+      await env.objects.delete(`${prefix}${reference}`);
     },
   };
 }

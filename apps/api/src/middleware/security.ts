@@ -108,9 +108,7 @@ export const requireAuth: MiddlewareHandler<AppContext> = async (c, next) => {
     throw authenticationError('AUTHENTICATION_REQUIRED', 'Sign in to continue');
   }
 
-  const actor = await withConnection(c.env, c.executionCtx, (sql) =>
-    resolveSession(sql, c.env, token),
-  );
+  const actor = await withConnection(c.env, (sql) => resolveSession(sql, c.env, token));
   c.set('actor', actor);
   await next();
 };

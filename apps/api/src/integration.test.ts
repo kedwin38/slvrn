@@ -14,14 +14,11 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import {
   createTestEnvironment,
-  drainQueue,
   scriptDaraja,
   b2cSuccessCallback,
   b2cFailureCallback,
   type TestEnvironment,
 } from './test-harness.js';
-import { handlePaymentBatch } from './queues/payment-executor.js';
-import { handleCallbackBatch } from './queues/callback-processor.js';
 import { openAuthorizationCeremony, releaseBatch } from './services/authorization.js';
 import {
   hashPassword,
@@ -100,9 +97,9 @@ suite('SOLVAREN end-to-end', () => {
       `;
     }
 
-    harness.queues.payments.clear();
-    harness.queues.callbacks.clear();
-    harness.queues.reconciliation.clear();
+    await harness.queues.payments.clear();
+    await harness.queues.callbacks.clear();
+    await harness.queues.reconciliation.clear();
   });
 
   // -------------------------------------------------------------------------
@@ -190,7 +187,7 @@ suite('SOLVAREN end-to-end', () => {
       const actor = await actorFor(L1, 'L1');
 
       await expect(
-        withConnection(harness.env, null, (sql) =>
+        withConnection(harness.env, (sql) =>
           openAuthorizationCeremony({
             sql,
             actor,
@@ -207,7 +204,7 @@ suite('SOLVAREN end-to-end', () => {
       const actor = await actorFor(L2_OTHER, 'L2');
 
       await expect(
-        withConnection(harness.env, null, (sql) =>
+        withConnection(harness.env, (sql) =>
           openAuthorizationCeremony({
             sql,
             actor,
@@ -223,7 +220,7 @@ suite('SOLVAREN end-to-end', () => {
       const { batchId, totalCents } = await seedApprovedBatch();
       const actor = await actorFor(L3, 'L3');
 
-      const ceremony = await withConnection(harness.env, null, (sql) =>
+      const ceremony = await withConnection(harness.env, (sql) =>
         openAuthorizationCeremony({
           sql,
           actor,
@@ -260,7 +257,7 @@ suite('SOLVAREN end-to-end', () => {
       const actor = await actorFor(L3, 'L3');
 
       await expect(
-        withConnection(harness.env, null, (s) =>
+        withConnection(harness.env, (s) =>
           openAuthorizationCeremony({
             sql: s,
             actor,
@@ -279,7 +276,7 @@ suite('SOLVAREN end-to-end', () => {
       const actor = await actorFor(L3, 'L3');
 
       await expect(
-        withConnection(harness.env, null, (s) =>
+        withConnection(harness.env, (s) =>
           openAuthorizationCeremony({
             sql: s,
             actor,
@@ -305,7 +302,7 @@ suite('SOLVAREN end-to-end', () => {
       const actor = await actorFor(L3, 'L3');
 
       await expect(
-        withConnection(harness.env, null, (s) =>
+        withConnection(harness.env, (s) =>
           openAuthorizationCeremony({
             sql: s,
             actor,
@@ -330,7 +327,7 @@ suite('SOLVAREN end-to-end', () => {
       const { batchId, instructionIds } = await seedApprovedBatch();
       const actor = await actorFor(L3, 'L3');
 
-      const ceremony = await withConnection(harness.env, null, (s) =>
+      const ceremony = await withConnection(harness.env, (s) =>
         openAuthorizationCeremony({
           sql: s,
           actor,
@@ -350,7 +347,7 @@ suite('SOLVAREN end-to-end', () => {
       await sql`ALTER TABLE payment_instructions ENABLE TRIGGER instructions_guard_update`;
 
       await expect(
-        withConnection(harness.env, null, (s) =>
+        withConnection(harness.env, (s) =>
           releaseBatch({
             sql: s,
             env: harness.env,
@@ -368,7 +365,7 @@ suite('SOLVAREN end-to-end', () => {
       ).rejects.toMatchObject({ code: 'MANIFEST_CHANGED' });
 
       // And nothing was queued.
-      expect(harness.queues.payments.pending()).toHaveLength(0);
+      expect(await harness.queues.payments.pending()).toHaveLength(0);
     });
 
     it('the database itself refuses the edit that the manifest check also catches', async () => {
@@ -386,7 +383,7 @@ suite('SOLVAREN end-to-end', () => {
       const actor = await actorFor(L3, 'L3');
 
       await expect(
-        withConnection(harness.env, null, (s) =>
+        withConnection(harness.env, (s) =>
           openAuthorizationCeremony({
             sql: s,
             actor,
@@ -407,7 +404,7 @@ suite('SOLVAREN end-to-end', () => {
     it('refuses release without a verified WebAuthn signature', async () => {
       const { batchId } = await seedApprovedBatch();
       const actor = await actorFor(L3, 'L3');
-      const ceremony = await withConnection(harness.env, null, (s) =>
+      const ceremony = await withConnection(harness.env, (s) =>
         openAuthorizationCeremony({
           sql: s,
           actor,
@@ -418,7 +415,7 @@ suite('SOLVAREN end-to-end', () => {
       );
 
       await expect(
-        withConnection(harness.env, null, (s) =>
+        withConnection(harness.env, (s) =>
           releaseBatch({
             sql: s,
             env: harness.env,
@@ -439,7 +436,7 @@ suite('SOLVAREN end-to-end', () => {
     it('refuses release on a wrong authorization PIN, and records the attempt', async () => {
       const { batchId } = await seedApprovedBatch();
       const actor = await actorFor(L3, 'L3');
-      const ceremony = await withConnection(harness.env, null, (s) =>
+      const ceremony = await withConnection(harness.env, (s) =>
         openAuthorizationCeremony({
           sql: s,
           actor,
@@ -450,7 +447,7 @@ suite('SOLVAREN end-to-end', () => {
       );
 
       await expect(
-        withConnection(harness.env, null, (s) =>
+        withConnection(harness.env, (s) =>
           releaseBatch({
             sql: s,
             env: harness.env,
@@ -480,7 +477,7 @@ suite('SOLVAREN end-to-end', () => {
       await sql`UPDATE policies SET high_value_threshold_cents = 1000 WHERE organization_id = ${ORG}`;
       const { batchId } = await seedApprovedBatch();
       const actor = await actorFor(L3, 'L3');
-      const ceremony = await withConnection(harness.env, null, (s) =>
+      const ceremony = await withConnection(harness.env, (s) =>
         openAuthorizationCeremony({
           sql: s,
           actor,
@@ -492,7 +489,7 @@ suite('SOLVAREN end-to-end', () => {
       expect(ceremony.acknowledgementsRequired.length).toBeGreaterThan(0);
 
       await expect(
-        withConnection(harness.env, null, (s) =>
+        withConnection(harness.env, (s) =>
           releaseBatch({
             sql: s,
             env: harness.env,
@@ -515,7 +512,7 @@ suite('SOLVAREN end-to-end', () => {
     it('releases successfully and claims idempotency for every instruction', async () => {
       const { batchId, instructionIds, totalCents } = await seedApprovedBatch();
       const actor = await actorFor(L3, 'L3');
-      const ceremony = await withConnection(harness.env, null, (s) =>
+      const ceremony = await withConnection(harness.env, (s) =>
         openAuthorizationCeremony({
           sql: s,
           actor,
@@ -525,7 +522,7 @@ suite('SOLVAREN end-to-end', () => {
         }),
       );
 
-      const released = await withConnection(harness.env, null, (s) =>
+      const released = await withConnection(harness.env, (s) =>
         releaseBatch({
           sql: s,
           env: harness.env,
@@ -550,17 +547,25 @@ suite('SOLVAREN end-to-end', () => {
       `;
       expect(Number(claims[0]!.count)).toBe(instructionIds.length);
 
+      // QUEUED, not AUTHORIZED. `releaseBatch` now enqueues the payment jobs in the same
+      // transaction as the claims, so by commit time the batch really is queued — there is
+      // no longer a window in which it is authorized with nothing scheduled to pay it.
       const state = await harness.sql<{ state: string; authorized_by_user_id: string }[]>`
         SELECT state, authorized_by_user_id FROM payment_batches WHERE id = ${batchId}
       `;
-      expect(state[0]!.state).toBe('AUTHORIZED');
+      expect(state[0]!.state).toBe('QUEUED');
       expect(state[0]!.authorized_by_user_id).toBe(L3);
+
+      // The claims and the jobs are the same count, and both landed in that one commit.
+      const jobs = await harness.queues.payments.all();
+      expect(jobs).toHaveLength(instructionIds.length);
+      expect(jobs.every((job) => job.status === 'PENDING')).toBe(true);
     });
 
     it('spec 23 replay: the same challenge cannot be used twice', async () => {
       const { batchId } = await seedApprovedBatch();
       const actor = await actorFor(L3, 'L3');
-      const ceremony = await withConnection(harness.env, null, (s) =>
+      const ceremony = await withConnection(harness.env, (s) =>
         openAuthorizationCeremony({
           sql: s,
           actor,
@@ -571,7 +576,7 @@ suite('SOLVAREN end-to-end', () => {
       );
 
       const release = () =>
-        withConnection(harness.env, null, (s) =>
+        withConnection(harness.env, (s) =>
           releaseBatch({
             sql: s,
             env: harness.env,
@@ -609,7 +614,7 @@ suite('SOLVAREN end-to-end', () => {
     async function releaseAndGetMessages() {
       const seeded = await seedApprovedBatch({ amounts: [45_000_00] });
       const actor = await actorFor(L3, 'L3');
-      const ceremony = await withConnection(harness.env, null, (s) =>
+      const ceremony = await withConnection(harness.env, (s) =>
         openAuthorizationCeremony({
           sql: s,
           actor,
@@ -618,7 +623,7 @@ suite('SOLVAREN end-to-end', () => {
           securityContext: {},
         }),
       );
-      const released = await withConnection(harness.env, null, (s) =>
+      const released = await withConnection(harness.env, (s) =>
         releaseBatch({
           sql: s,
           env: harness.env,
@@ -716,7 +721,7 @@ suite('SOLVAREN end-to-end', () => {
       const script = await enableDaraja(scriptDaraja());
       const seeded = await releaseAndGetMessages();
 
-      await drainQueue(harness.queues.payments, handlePaymentBatch, harness.env, harness.ctx);
+      await harness.drain('payments');
 
       expect(script.submissions).toHaveLength(1);
       expect(script.submissions[0]!.PartyB).toMatch(/^2547\d{8}$/);
@@ -735,19 +740,19 @@ suite('SOLVAREN end-to-end', () => {
       const script = await enableDaraja(scriptDaraja());
       const seeded = await releaseAndGetMessages();
 
-      await drainQueue(harness.queues.payments, handlePaymentBatch, harness.env, harness.ctx);
+      await harness.drain('payments');
       expect(script.submissions).toHaveLength(1);
 
       // The queue redelivers the same message — a worker crash, a duplicate delivery, a
       // retry. This is the double-payment scenario.
-      const original = harness.queues.payments.messages[0]!;
-      original.acked = false;
-      await drainQueue(harness.queues.payments, handlePaymentBatch, harness.env, harness.ctx);
+      const original = (await harness.queues.payments.all())[0]!;
+      await harness.queues.payments.redeliver(original.id);
+      await harness.drain('payments');
 
       // Still exactly one request reached M-PESA.
       expect(script.submissions).toHaveLength(1);
       // And a reconciliation was enqueued instead.
-      expect(harness.queues.reconciliation.messages.length).toBeGreaterThan(0);
+      expect((await harness.queues.reconciliation.all()).length).toBeGreaterThan(0);
 
       const transactions = await harness.sql<{ count: string }[]>`
         SELECT COUNT(*) AS count FROM transactions WHERE batch_id = ${seeded.batchId}
@@ -759,7 +764,7 @@ suite('SOLVAREN end-to-end', () => {
       const script = await enableDaraja(scriptDaraja({ b2c: [{ kind: 'timeout' }] }));
       const seeded = await releaseAndGetMessages();
 
-      await drainQueue(harness.queues.payments, handlePaymentBatch, harness.env, harness.ctx);
+      await harness.drain('payments');
 
       expect(script.submissions).toHaveLength(1);
 
@@ -801,7 +806,7 @@ suite('SOLVAREN end-to-end', () => {
       );
       const seeded = await releaseAndGetMessages();
 
-      await drainQueue(harness.queues.payments, handlePaymentBatch, harness.env, harness.ctx);
+      await harness.drain('payments');
       expect(script.submissions).toHaveLength(1);
 
       const transactions = await harness.sql<
@@ -858,7 +863,7 @@ suite('SOLVAREN end-to-end', () => {
         callbackType: type as 'B2C_RESULT',
         correlationId: 'cor_T',
       });
-      await drainQueue(harness.queues.callbacks, handleCallbackBatch, harness.env, harness.ctx);
+      await harness.drain('callbacks');
       return rows[0].id;
     }
 
@@ -977,7 +982,7 @@ suite('SOLVAREN end-to-end', () => {
 
       // Every seeded batch pays brand-new recipients, which legitimately scores as risk.
       await expect(
-        withConnection(harness.env, null, (s) =>
+        withConnection(harness.env, (s) =>
           openAuthorizationCeremony({
             sql: s,
             actor,
@@ -1010,7 +1015,7 @@ suite('SOLVAREN end-to-end', () => {
         SELECT id, organization_id, version, last_material_edit_at, submitted_at
           FROM payment_batches WHERE id = ${batchId}
       `;
-      await withConnection(harness.env, null, async (s) => {
+      await withConnection(harness.env, async (s) => {
         const policy = await loadPolicy(s, ORG);
         const assessment = await assessBatch(s, batchRows[0]!, policy);
         await persistFindings(s, batchRows[0]!, assessment);
@@ -1023,7 +1028,7 @@ suite('SOLVAREN end-to-end', () => {
       await sql`UPDATE policies SET blocking_risk_band = 'HIGH' WHERE organization_id = ${ORG}`;
 
       const actor = await actorFor(L3, 'L3');
-      const ceremony = await withConnection(harness.env, null, (s) =>
+      const ceremony = await withConnection(harness.env, (s) =>
         openAuthorizationCeremony({
           sql: s,
           actor,
@@ -1046,7 +1051,7 @@ suite('SOLVAREN end-to-end', () => {
     it('records the release with its manifest digest and verifies as an intact chain', async () => {
       const { batchId } = await seedApprovedBatch();
       const actor = await actorFor(L3, 'L3');
-      const ceremony = await withConnection(harness.env, null, (s) =>
+      const ceremony = await withConnection(harness.env, (s) =>
         openAuthorizationCeremony({
           sql: s,
           actor,
@@ -1055,7 +1060,7 @@ suite('SOLVAREN end-to-end', () => {
           securityContext: {},
         }),
       );
-      await withConnection(harness.env, null, (s) =>
+      await withConnection(harness.env, (s) =>
         releaseBatch({
           sql: s,
           env: harness.env,
@@ -1121,7 +1126,7 @@ suite('SOLVAREN end-to-end', () => {
     it('records a denied PIN attempt as a security event', async () => {
       const { batchId } = await seedApprovedBatch();
       const actor = await actorFor(L3, 'L3');
-      const ceremony = await withConnection(harness.env, null, (s) =>
+      const ceremony = await withConnection(harness.env, (s) =>
         openAuthorizationCeremony({
           sql: s,
           actor,
@@ -1131,7 +1136,7 @@ suite('SOLVAREN end-to-end', () => {
         }),
       );
 
-      await withConnection(harness.env, null, (s) =>
+      await withConnection(harness.env, (s) =>
         releaseBatch({
           sql: s,
           env: harness.env,

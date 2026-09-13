@@ -36,7 +36,7 @@ dashboardRoutes.use('*', requireAuth);
 dashboardRoutes.get('/operational', requirePermissions('analytics:basic'), async (c) => {
   const actor = actorOf(c);
 
-  const data = await withConnection(c.env, c.executionCtx, async (sql) => {
+  const data = await withConnection(c.env, async (sql) => {
     const batches = await sql<{ state: string; count: string }[]>`
       SELECT state, COUNT(*) AS count
         FROM payment_batches
@@ -127,7 +127,7 @@ dashboardRoutes.get('/operational', requirePermissions('analytics:basic'), async
 dashboardRoutes.get('/financial', requirePermissions('analytics:advanced'), async (c) => {
   const actor = actorOf(c);
 
-  const data = await withConnection(c.env, c.executionCtx, async (sql) => {
+  const data = await withConnection(c.env, async (sql) => {
     const departments = await sql<
       {
         department_name: string | null;
@@ -221,7 +221,7 @@ dashboardRoutes.get(
   async (c) => {
     const actor = actorOf(c);
 
-    const data = await withConnection(c.env, c.executionCtx, async (sql) => {
+    const data = await withConnection(c.env, async (sql) => {
       // DISTINCT ON gives the newest snapshot per account type in a single pass.
       const balances = await sql<
         {
@@ -287,9 +287,9 @@ dashboardRoutes.post(
       requestedByUserId: actor.userId,
       correlationId,
     };
-    await c.env.RECONCILIATION_QUEUE.send(message);
+    await c.env.queue.send({ queue: 'reconciliation', body: message });
 
-    await withConnection(c.env, c.executionCtx, (sql) =>
+    await withConnection(c.env, (sql) =>
       inTransaction(sql, (tx) =>
         writeAuditEvent(tx, {
           organizationId: actor.organizationId,
@@ -330,7 +330,7 @@ dashboardRoutes.get(
     const actor = actorOf(c);
     const limit = Math.min(Number(new URL(c.req.url).searchParams.get('limit') ?? '20'), 100);
 
-    const data = await withConnection(c.env, c.executionCtx, async (sql) => {
+    const data = await withConnection(c.env, async (sql) => {
       const rows = await sql<
         {
           transaction_id: string;
@@ -386,7 +386,7 @@ dashboardRoutes.get('/executive/briefing', requirePermissions('analytics:executi
     );
   }
 
-  const data = await withConnection(c.env, c.executionCtx, async (sql) => {
+  const data = await withConnection(c.env, async (sql) => {
     const months = await sql<{ period: string; total_cents: string; count: string }[]>`
         SELECT date_trunc('month', t.completed_at AT TIME ZONE 'Africa/Nairobi')::DATE::text AS period,
                SUM(pi.amount_cents) AS total_cents, COUNT(*) AS count

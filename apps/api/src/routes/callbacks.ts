@@ -67,7 +67,7 @@ async function ingest(c: Context<AppContext>, kind: CallbackKind): Promise<Respo
     return c.json(ACK, 200);
   }
 
-  await withConnection(c.env, c.executionCtx, async (sql) => {
+  await withConnection(c.env, async (sql) => {
     // ---- Authenticate ------------------------------------------------------
     const expectedSecret = await loadCallbackSecret(sql, c.env, organizationId);
     const globalSecret = c.env.CALLBACK_SHARED_SECRET;
@@ -168,7 +168,7 @@ async function ingest(c: Context<AppContext>, kind: CallbackKind): Promise<Respo
       callbackType: kind,
       correlationId,
     };
-    await c.env.CALLBACK_QUEUE.send(message);
+    await c.env.queue.send({ queue: 'callbacks', body: message });
 
     await inTransaction(sql, (tx) =>
       writeAuditEvent(tx, {

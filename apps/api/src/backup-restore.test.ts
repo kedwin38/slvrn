@@ -136,18 +136,18 @@ suite('backup and restore', () => {
     expect(attempts[0]!.ended_at).toBeTruthy();
 
     // The object genuinely exists in storage, not merely in the attempt record.
-    expect(harness.r2.objects.has(attempts[0]!.object_key)).toBe(true);
+    expect(harness.storage.objects.has(attempts[0]!.object_key)).toBe(true);
   });
 
   it('the object name carries no payroll information (spec §13.7)', async () => {
-    const key = [...harness.r2.objects.keys()][0]!;
+    const key = [...harness.storage.objects.keys()][0]!;
     expect(key).not.toMatch(/Wanjiku|254712345678|payroll|45000/i);
     expect(key).toContain(ORG); // opaque organisation id is fine
   });
 
   it('excludes credential material from the snapshot', async () => {
-    const key = [...harness.r2.objects.keys()][0]!;
-    const snapshot = JSON.parse(harness.r2.objects.get(key)!.body);
+    const key = [...harness.storage.objects.keys()][0]!;
+    const snapshot = JSON.parse(new TextDecoder().decode(harness.storage.objects.get(key)!.body));
 
     // Sessions are absent entirely; password and PIN hashes are stripped from users.
     expect(snapshot.data.sessions).toBeUndefined();
@@ -159,8 +159,8 @@ suite('backup and restore', () => {
   });
 
   it('restores into a fresh database with the audit chain intact', async () => {
-    const key = [...harness.r2.objects.keys()][0]!;
-    const snapshot = JSON.parse(harness.r2.objects.get(key)!.body);
+    const key = [...harness.storage.objects.keys()][0]!;
+    const snapshot = JSON.parse(new TextDecoder().decode(harness.storage.objects.get(key)!.body));
 
     const adminUrl = process.env.SOLVAREN_TEST_DATABASE_URL!;
     const restoreName = `solvaren_restore_${process.pid}`;
@@ -328,7 +328,7 @@ suite('backup and restore', () => {
        WHERE organization_id = ${ORG} AND status = 'SUCCESS' AND object_retired_at IS NOT NULL
     `;
     for (const row of liveKeys) {
-      expect(harness.r2.objects.has(row.object_key)).toBe(false);
+      expect(harness.storage.objects.has(row.object_key)).toBe(false);
     }
     expect(liveKeys.length).toBeGreaterThan(0);
 

@@ -15,7 +15,7 @@
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { createTestEnvironment, type TestEnvironment } from './test-harness.js';
-import worker from './index.js';
+import { app } from './index.js';
 import {
   hashPassword,
   hashAuthorizationPin,
@@ -91,14 +91,13 @@ suite('HTTP routes', () => {
     if (options.level) headers.Authorization = `Bearer ${tokens[options.level]}`;
     if (options.body !== undefined) headers['Content-Type'] = 'application/json';
 
-    return worker.fetch(
+    return app.fetch(
       new Request(`https://api.solvaren.test${path}`, {
         method: options.method ?? 'GET',
         headers,
         body: options.body === undefined ? undefined : JSON.stringify(options.body),
       }),
       harness.env,
-      harness.ctx,
     );
   }
 
@@ -192,7 +191,7 @@ suite('HTTP routes', () => {
       });
       expect(response.status).toBe(403);
       // And nothing was enqueued.
-      expect(harness.queues.reconciliation.pending()).toHaveLength(0);
+      expect(await harness.queues.reconciliation.pending()).toHaveLength(0);
     });
 
     it('serves both panels to L3', async () => {
@@ -545,7 +544,7 @@ suite('HTTP routes', () => {
     };
 
     it('accepts a valid callback and enqueues it for processing', async () => {
-      const response = await worker.fetch(
+      const response = await app.fetch(
         new Request(
           `https://api.solvaren.test/integrations/daraja/callback/${ORG}/${harness.env.CALLBACK_SHARED_SECRET}`,
           {
@@ -555,15 +554,14 @@ suite('HTTP routes', () => {
           },
         ),
         harness.env,
-        harness.ctx,
       );
       expect(response.status).toBe(200);
-      expect(harness.queues.callbacks.messages.length).toBeGreaterThan(0);
+      expect((await harness.queues.callbacks.all()).length).toBeGreaterThan(0);
     });
 
     it('a forged secret is refused, and is indistinguishable from success to the caller', async () => {
-      const before = harness.queues.callbacks.messages.length;
-      const response = await worker.fetch(
+      const before = (await harness.queues.callbacks.all()).length;
+      const response = await app.fetch(
         new Request(`https://api.solvaren.test/integrations/daraja/callback/${ORG}/wrong-secret`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -573,13 +571,12 @@ suite('HTTP routes', () => {
           }),
         }),
         harness.env,
-        harness.ctx,
       );
 
       // 200, so a prober learns nothing about whether the organisation or the secret was wrong.
       expect(response.status).toBe(200);
       // But nothing was accepted.
-      expect(harness.queues.callbacks.messages.length).toBe(before);
+      expect((await harness.queues.callbacks.all()).length).toBe(before);
 
       const events = await harness.sql<{ event_type: string; severity: string }[]>`
         SELECT event_type, severity FROM security_events
@@ -590,14 +587,13 @@ suite('HTTP routes', () => {
     });
 
     it('a malformed organisation id is rejected before it reaches a query', async () => {
-      const response = await worker.fetch(
+      const response = await app.fetch(
         new Request(`https://api.solvaren.test/integrations/daraja/callback/not-a-uuid/secret`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(envelope),
         }),
         harness.env,
-        harness.ctx,
       );
       expect(response.status).toBe(200);
     });
@@ -608,7 +604,7 @@ suite('HTTP routes', () => {
         Result: { ...envelope.Result, OriginatorConversationID: 'DEDUPE-TEST' },
       };
       const send = () =>
-        worker.fetch(
+        app.fetch(
           new Request(
             `https://api.solvaren.test/integrations/daraja/callback/${ORG}/${harness.env.CALLBACK_SHARED_SECRET}`,
             {
@@ -618,13 +614,12 @@ suite('HTTP routes', () => {
             },
           ),
           harness.env,
-          harness.ctx,
         );
 
       await send();
-      const afterFirst = harness.queues.callbacks.messages.length;
+      const afterFirst = (await harness.queues.callbacks.all()).length;
       await send();
-      expect(harness.queues.callbacks.messages.length).toBe(afterFirst);
+      expect((await harness.queues.callbacks.all()).length).toBe(afterFirst);
 
       const stored = await harness.sql<{ count: string }[]>`
         SELECT COUNT(*) AS count FROM provider_callbacks
@@ -663,21 +658,19 @@ suite('HTTP routes', () => {
     });
 
     it('allows the configured console origin and no other', async () => {
-      const allowed = await worker.fetch(
+      const allowed = await app.fetch(
         new Request('https://api.solvaren.test/health', {
           headers: { Origin: harness.env.APP_ORIGIN },
         }),
         harness.env,
-        harness.ctx,
       );
       expect(allowed.headers.get('Access-Control-Allow-Origin')).toBe(harness.env.APP_ORIGIN);
 
-      const rejected = await worker.fetch(
+      const rejected = await app.fetch(
         new Request('https://api.solvaren.test/health', {
           headers: { Origin: 'https://evil.example' },
         }),
         harness.env,
-        harness.ctx,
       );
       expect(rejected.headers.get('Access-Control-Allow-Origin')).toBeNull();
     });

@@ -184,12 +184,57 @@ else
   echo "$dsn_hits" | cut -c1-160 | sed 's/^/      /'
 fi
 
-# Secrets must be bindings, never values in the Worker configuration.
-if grep -qE '^\s*(CONSUMER_SECRET|SECURITY_CREDENTIAL|SESSION_SIGNING_KEY|SECRET_ENCRYPTION_KEY|AI_API_KEY)\s*=' \
-     apps/api/wrangler.toml 2>/dev/null; then
-  fail "a secret is assigned a value in wrangler.toml; use 'wrangler secret put' instead"
+# Secrets are environment variables set on the platform, never values committed to the
+# deployment manifests. A Dockerfile ENV or a railway.json holding a real key would ship
+# that key in the image layer, where it survives every later attempt to remove it.
+secret_in_manifest="$(grep -rnE '(CONSUMER_SECRET|SECURITY_CREDENTIAL|SESSION_SIGNING_KEY|SECRET_ENCRYPTION_KEY|CALLBACK_SHARED_SECRET|AI_API_KEY|S3_SECRET_ACCESS_KEY)=[^ \"$]' \
+  --include='Dockerfile' --include='railway.json' --include='*.yml' --include='*.yaml' \
+  --exclude-dir=node_modules . 2>/dev/null | grep -vE '=\s*\$\{?\{' || true)"
+if [ -z "$secret_in_manifest" ]; then
+  pass "no secret is assigned a literal value in a deployment manifest"
 else
-  pass "no secret is assigned a value in wrangler.toml"
+  fail "a secret is assigned a value in a deployment manifest:"
+  echo "$secret_in_manifest" | cut -c1-160 | sed 's/^/      /'
+fi
+
+# The console's security headers moved from Cloudflare Pages `_headers` (which only
+# Cloudflare reads) into the nginx config. Losing them silently was the most likely way for
+# the Railway migration to weaken the product, so each directive is asserted individually.
+missing_headers=""
+for directive in \
+  "X-Content-Type-Options" \
+  "X-Frame-Options" \
+  "Referrer-Policy" \
+  "Permissions-Policy" \
+  "Strict-Transport-Security" \
+  "Cross-Origin-Opener-Policy" \
+  "Content-Security-Policy"; do
+  grep -q "$directive" apps/web/nginx.conf 2>/dev/null || missing_headers="$missing_headers $directive"
+done
+if [ -z "$missing_headers" ]; then
+  pass "the console still sets every hardening header it set on Cloudflare Pages"
+else
+  fail "the console's nginx config is missing:$missing_headers"
+fi
+
+# WebAuthn will not work without this one, and its absence fails open rather than loudly.
+if grep -qE '^\s*add_header\s+Permissions-Policy\s+"[^"]*publickey-credentials-get=\(self\)' \
+     apps/web/nginx.conf 2>/dev/null; then
+  pass "Permissions-Policy still permits the WebAuthn release ceremony"
+else
+  fail "Permissions-Policy no longer allows publickey-credentials-get; the release ceremony would break"
+fi
+
+# The migration away from Cloudflare must be complete, not partial: a stale wrangler.toml
+# or _headers file is configuration that looks live and is inert.
+stale_cloudflare="$(find . \
+  \( -path './node_modules' -o -path '*/node_modules' -o -path '*/dist' -o -path './coverage' \) -prune -o \
+  \( -name 'wrangler.toml' -o -name '_headers' -o -name '_redirects' \) -print 2>/dev/null || true)"
+if [ -z "$stale_cloudflare" ]; then
+  pass "no inert Cloudflare configuration remains in the tree"
+else
+  fail "Cloudflare configuration that no longer does anything is still present:"
+  echo "$stale_cloudflare" | sed 's/^/      /'
 fi
 
 # ---------------------------------------------------------------------------

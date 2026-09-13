@@ -187,6 +187,28 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
 
+      # The API must compile to the artefact the container actually runs. A build that only
+      # typechecks would let a bad emit configuration reach Railway unnoticed.
+      - name: Build the API
+        run: |
+          set -euo pipefail
+          pnpm --filter @solvaren/core build
+          pnpm --filter @solvaren/daraja build
+          pnpm --filter @solvaren/api build
+          test -f apps/api/dist/server.js
+
+      - name: No test code in the deployable output
+        run: |
+          set -euo pipefail
+          # Test fixtures and the disposable-database harness must never ship in an image.
+          found="$(find apps/api/dist packages/core/dist packages/daraja/dist \
+            \( -name '*.test.js' -o -name 'test-harness.js' \) 2>/dev/null || true)"
+          if [ -n "$found" ]; then
+            echo "::error::test code was emitted into the production build:"
+            echo "$found"
+            exit 1
+          fi
+
       - name: Build the console
         run: pnpm --filter @solvaren/web build
 
@@ -199,21 +221,20 @@ jobs:
           budget=$((120 * 1024))
           echo "Gzipped JavaScript: $((total / 1024)) KB (budget $((budget / 1024)) KB)"
           if [ "$total" -gt "$budget" ]; then
-            echo "::error::The JavaScript bundle exceeds its budget."
+            echo "::error::bundle is over budget"
             exit 1
           fi
 
-      - name: Validate the Worker configuration
-        run: |
-          set -euo pipefail
-          # A dry-run deploy catches a malformed wrangler.toml, a missing binding or a
-          # Durable Object class that is declared but not exported — all of which would
-          # otherwise fail at deploy time, mid-release.
-          cd apps/api
-          npx wrangler deploy --dry-run --outdir /tmp/worker-build --env staging 2>&1 | tail -20
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: console
-          path: apps/web/dist/
-          retention-days: 7
+  # -------------------------------------------------------------------------
+  docker:
+    name: Container images build
+    runs-on: ubuntu-latest
+    needs: [static]
+    steps:
+      - uses: actions/checkout@v4
+      # The images are what Railway deploys. A Dockerfile that only works on a developer's
+      # machine is a broken deploy discovered at the worst time.
+      - name: Build the API image
+        run: docker build -f apps/api/Dockerfile -t solvaren-api:ci .
+      - name: Build the console image
+        run: docker build -f apps/web/Dockerfile -t solvaren-web:ci --build-arg VITE_API_BASE_URL=https://api.example.test .

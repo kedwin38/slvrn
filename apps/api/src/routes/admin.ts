@@ -78,7 +78,7 @@ adminRoutes.post(
     const body = darajaConfigSchema.parse(await c.req.json());
     const correlationId = c.get('correlationId');
 
-    const masked = await withConnection(c.env, c.executionCtx, async (sql) => {
+    const masked = await withConnection(c.env, async (sql) => {
       const previous = await sql<{ credential_version: number; status: string }[]>`
         SELECT credential_version, status FROM daraja_configurations
          WHERE organization_id = ${actor.organizationId} AND environment = ${body.environment}
@@ -144,7 +144,7 @@ adminRoutes.get(
   async (c) => {
     const actor = actorOf(c);
 
-    const configs = await withConnection(c.env, c.executionCtx, async (sql) => {
+    const configs = await withConnection(c.env, async (sql) => {
       const rows = await sql<DarajaConfigRow[]>`
       SELECT * FROM daraja_configurations
        WHERE organization_id = ${actor.organizationId}
@@ -167,7 +167,7 @@ adminRoutes.post(
     const configId = c.req.param('id');
     const correlationId = c.get('correlationId');
 
-    const result = await withConnection(c.env, c.executionCtx, async (sql) => {
+    const result = await withConnection(c.env, async (sql) => {
       const { client } = await loadDarajaClientById(sql, c.env, actor.organizationId, configId);
       const test = await client.testConnection();
 
@@ -211,7 +211,7 @@ adminRoutes.post(
     const configId = c.req.param('id');
     const correlationId = c.get('correlationId');
 
-    await withConnection(c.env, c.executionCtx, (sql) =>
+    await withConnection(c.env, (sql) =>
       inTransaction(sql, async (tx) => {
         const rows = await tx<{ last_test_ok: boolean | null; environment: string }[]>`
           SELECT last_test_ok, environment FROM daraja_configurations
@@ -271,7 +271,7 @@ adminRoutes.post(
     const configId = c.req.param('id');
     const body = z.object({ reason: z.string().trim().max(500) }).parse(await c.req.json());
 
-    await withConnection(c.env, c.executionCtx, (sql) =>
+    await withConnection(c.env, (sql) =>
       inTransaction(sql, async (tx) => {
         await tx`
           UPDATE daraja_configurations SET status = 'DISABLED'
@@ -329,7 +329,7 @@ adminRoutes.post(
     const body = backupConfigSchema.parse(await c.req.json());
     const correlationId = c.get('correlationId');
 
-    const result = await withConnection(c.env, c.executionCtx, async (sql) => {
+    const result = await withConnection(c.env, async (sql) => {
       const store = createSecretStore(c.env);
       const accessRef = secretReference(actor.organizationId, 'backup', 'access_key');
       const secretRef = secretReference(actor.organizationId, 'backup', 'secret_key');
@@ -415,7 +415,7 @@ adminRoutes.post(
     const correlationId = c.get('correlationId');
     const attemptReference = reference('BAK');
 
-    await withConnection(c.env, c.executionCtx, async (sql) => {
+    await withConnection(c.env, async (sql) => {
       const configs = await sql<{ id: string }[]>`
         SELECT id FROM backup_configurations WHERE organization_id = ${actor.organizationId}
       `;
@@ -434,7 +434,7 @@ adminRoutes.post(
         requestedByUserId: actor.userId,
         correlationId,
       };
-      await c.env.BACKUP_QUEUE.send(message);
+      await c.env.queue.send({ queue: 'backups', body: message });
 
       await inTransaction(sql, (tx) =>
         writeAuditEvent(tx, {
@@ -474,7 +474,7 @@ adminRoutes.get(
   async (c) => {
     const actor = actorOf(c);
 
-    const data = await withConnection(c.env, c.executionCtx, async (sql) => {
+    const data = await withConnection(c.env, async (sql) => {
       const configs = await sql<
         {
           id: string;
@@ -621,7 +621,7 @@ adminRoutes.patch(
       })
       .parse(await c.req.json());
 
-    await withConnection(c.env, c.executionCtx, (sql) =>
+    await withConnection(c.env, (sql) =>
       inTransaction(sql, async (tx) => {
         const rows = await tx<{ last_test_ok: boolean | null }[]>`
           SELECT last_test_ok FROM backup_configurations WHERE organization_id = ${actor.organizationId}
@@ -675,9 +675,7 @@ adminRoutes.get(
   async (c) => {
     const actor = actorOf(c);
     const { loadPolicy } = await import('../services/policy-store.js');
-    const policy = await withConnection(c.env, c.executionCtx, (sql) =>
-      loadPolicy(sql, actor.organizationId),
-    );
+    const policy = await withConnection(c.env, (sql) => loadPolicy(sql, actor.organizationId));
     return c.json({ policy });
   },
 );
@@ -694,7 +692,7 @@ adminRoutes.patch(
 
     const { loadPolicy } = await import('../services/policy-store.js');
 
-    const updated = await withConnection(c.env, c.executionCtx, (sql) =>
+    const updated = await withConnection(c.env, (sql) =>
       inTransaction(sql, async (tx) => {
         const before = await loadPolicy(tx, actor.organizationId);
         const merged = policySchema.parse({ ...before, ...body });
@@ -764,7 +762,7 @@ adminRoutes.get('/audit', requirePermissions('audit:read_org'), async (c) => {
   const limit = Math.min(Number(url.searchParams.get('limit') ?? '100'), 500);
   const offset = Math.max(Number(url.searchParams.get('offset') ?? '0'), 0);
 
-  const events = await withConnection(c.env, c.executionCtx, async (sql) => {
+  const events = await withConnection(c.env, async (sql) => {
     return sql<
       {
         event_reference: string;
@@ -820,7 +818,7 @@ adminRoutes.post(
       })
       .parse(await c.req.json().catch(() => ({})));
 
-    const verification = await withConnection(c.env, c.executionCtx, async (sql) => {
+    const verification = await withConnection(c.env, async (sql) => {
       const rows = await sql<
         {
           event_reference: string;

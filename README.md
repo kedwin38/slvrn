@@ -48,18 +48,17 @@ to the provider's own description — never blank, never the bare word "Error".
 ```
 packages/core/       Domain and security kernel — pure, no I/O, exhaustively tested
 packages/daraja/     M-PESA Daraja B2C, Transaction Status, Account Balance
-apps/api/            Cloudflare Worker: HTTP API, four queue consumers, three cron jobs
+apps/api/            Node service: HTTP API, four queue consumers, the scheduler
 apps/web/            The console — React, bespoke design system, no UI framework
 db/migrations/       PostgreSQL schema. The immutability guarantees live here.
-db/tests/            45 assertions that attack the schema directly
-infra/terraform/     Cloudflare WAF, rate limits, Access policies
+db/tests/            53 assertions that attack the schema directly
 docs/                Deployment, runbooks, threat model, specification coverage
 scripts/             Invariant checks, database harness, bootstrap, restore
 ```
 
 ### The security kernel is pure
 
-`packages/core` has no database, no network and no Cloudflare bindings. The rules that
+`packages/core` has no database, no network and no platform bindings. The rules that
 decide whether money may move are provable in isolation, and they are, before any
 infrastructure is involved: the RBAC matrix, the batch and transaction state machines, the
 manifest hashing, separation of duties, the failure dictionary, idempotency fingerprinting
@@ -91,14 +90,14 @@ pnpm install
 pnpm db:up
 export SOLVAREN_TEST_DATABASE_URL=postgres://postgres@localhost:5433/postgres
 
-pnpm verify     # format, lint, types, invariants, 313 tests, 45 database assertions
+pnpm verify     # format, lint, types, invariants, 350 tests, 53 database assertions
 ```
 
 | Command                 | What it does                                                                                                                                              |
 | ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `pnpm test`             | 313 unit, integration, HTTP and round-trip tests                                                                                                          |
-| `pnpm db:test`          | 45 assertions attacking the schema directly                                                                                                               |
-| `pnpm check:invariants` | 31 source properties that must hold (no SMS path, no vacuous permission check, every release gate invoked, no compiled output shadowing a source file, …) |
+| `pnpm test`             | 350 unit, integration, HTTP and round-trip tests                                                                                                          |
+| `pnpm db:test`          | 53 assertions attacking the schema directly                                                                                                               |
+| `pnpm check:invariants` | 34 source properties that must hold (no SMS path, no vacuous permission check, every release gate invoked, no compiled output shadowing a source file, …) |
 | `pnpm ui:check`         | Drives the built console in Chromium, both themes, asserts no page errors and no mobile overflow                                                          |
 | `pnpm db:generate-seed` | Regenerates the failure-reason migration from the source dictionary                                                                                       |
 
@@ -117,9 +116,12 @@ rediscover it.
 
 ## Deployment
 
-See [`docs/deployment.md`](docs/deployment.md). In short: PostgreSQL, then Cloudflare
-resources, then secrets as Worker bindings, then `pnpm verify`, then deploy, then
-Terraform, then the first L3 account, then Daraja, then a backup **and a restore**.
+Railway: two services (`solvaren-api`, `solvaren-web`) and a PostgreSQL database, with
+backups to any S3-compatible bucket.
+
+See [`docs/deployment.md`](docs/deployment.md). In short: PostgreSQL, then object storage,
+then secrets as Railway variables, then `pnpm verify`, then deploy, then the first L3
+account, then Daraja, then a backup **and a restore**.
 
 Runbooks for the situations that actually occur:
 
@@ -142,10 +144,17 @@ credentials and a shortcode. The `SecurityCredential` implementation _is_ verifi
 output is decrypted with OpenSSL, including keys parsed from a genuine X.509 certificate —
 but "Daraja accepts our B2C payload" is an untested claim until someone runs it.
 
-**Not deployed.** `wrangler deploy --dry-run` passes and every binding resolves, but no
-Cloudflare account has been touched. Hyperdrive ids are placeholders.
+**Not deployed.** The server builds, boots, serves, and shuts down cleanly — that much was
+run. The container images have _not_ been built, because this environment has no Docker
+daemon, so `apps/api/Dockerfile` and `apps/web/Dockerfile` are unverified. No Railway
+project has been created.
 
-**Coverage is 63.7% overall, and uneven on purpose.** The modules that decide whether money
+**There is no edge any more.** The Cloudflare build inherited a WAF, managed DDoS
+protection and edge rate limiting. Railway provides none of that, and the controls that
+replaced them are all application-level. Put a proxy in front of the API before exposing it;
+`docs/threat-model.md` states this as an accepted gap rather than burying it.
+
+**Coverage is 63.6% overall, and uneven on purpose.** The modules that decide whether money
 moves are at or near complete — RBAC, manifest hashing, the batch state machine, the policy
 engine and the CSV export are at 100%; the audit chain, crypto and idempotency are above
 97%; the release ceremony service is 88%. The shortfall is in analytics, reporting and
@@ -159,7 +168,7 @@ server-side pagination, indexes matching every sort column — but 10,000 concur
 transactions have not been run through it.
 
 **Open decisions remain open.** Specification §28 lists choices that are the organisation's
-to make: PostgreSQL host and region, whether administrative surfaces sit behind Cloudflare
+to make: PostgreSQL region, whether administrative surfaces sit behind a separate
 Access, whether financial data may reach the AI provider, RPO/RTO targets. The deployment
 guide says which of them block go-live.
 

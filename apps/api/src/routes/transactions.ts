@@ -226,7 +226,7 @@ transactionRoutes.get('/transactions', requirePermissions('transactions:read'), 
   const actor = actorOf(c);
   const query = parseExplorerQuery(new URL(c.req.url));
 
-  const result = await withConnection(c.env, c.executionCtx, async (sql) => {
+  const result = await withConnection(c.env, async (sql) => {
     const overrides = await loadFailureOverrides(sql, actor.organizationId);
     const { rows, total } = await queryExplorer(sql, actor.organizationId, query);
 
@@ -291,7 +291,7 @@ transactionRoutes.get('/transactions/:id', requirePermissions('transactions:read
     throw notFoundError('TRANSACTION_NOT_FOUND', 'That transaction could not be found');
   }
 
-  const result = await withConnection(c.env, c.executionCtx, async (sql) => {
+  const result = await withConnection(c.env, async (sql) => {
     const rows = await sql<ExplorerDbRow[]>`
       SELECT t.id AS transaction_id, pi.id AS instruction_id, b.id AS batch_id,
              b.batch_reference, r.id AS recipient_id,
@@ -393,7 +393,7 @@ exportRoutes.get(
     const url = new URL(c.req.url);
     const includeAmbiguous = url.searchParams.get('includeAmbiguous') === 'true';
 
-    const csv = await withConnection(c.env, c.executionCtx, async (sql) => {
+    const csv = await withConnection(c.env, async (sql) => {
       const policy = await loadPolicy(sql, actor.organizationId);
 
       // Spec 28: the failed-export policy for L1 is organisation-configurable.
@@ -549,7 +549,7 @@ transactionRoutes.post(
       throw notFoundError('TRANSACTION_NOT_FOUND', 'That transaction could not be found');
     }
 
-    await withConnection(c.env, c.executionCtx, async (sql) => {
+    await withConnection(c.env, async (sql) => {
       const rows = await sql<{ id: string; status: TxnState }[]>`
         SELECT id, status FROM transactions
          WHERE id = ${transactionId} AND organization_id = ${actor.organizationId}
@@ -573,7 +573,7 @@ transactionRoutes.post(
         requestedByUserId: actor.userId,
         correlationId,
       };
-      await c.env.RECONCILIATION_QUEUE.send(message);
+      await c.env.queue.send({ queue: 'reconciliation', body: message });
 
       await inTransaction(sql, (tx) =>
         writeAuditEvent(tx, {
@@ -611,7 +611,7 @@ transactionRoutes.get('/batches/:id/rollup', requirePermissions('transactions:re
     throw notFoundError('BATCH_NOT_FOUND', 'That batch could not be found');
   }
 
-  const rollup = await withConnection(c.env, c.executionCtx, async (sql) => {
+  const rollup = await withConnection(c.env, async (sql) => {
     const rows = await sql<
       {
         batch_reference: string;
@@ -661,7 +661,7 @@ transactionRoutes.get('/failure-summary', requirePermissions('transactions:read'
     .optional()
     .parse(new URL(c.req.url).searchParams.get('batchId') ?? undefined);
 
-  const summary = await withConnection(c.env, c.executionCtx, async (sql) => {
+  const summary = await withConnection(c.env, async (sql) => {
     const rows = await sql<
       {
         failure_code: string;

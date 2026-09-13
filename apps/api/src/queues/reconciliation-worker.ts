@@ -14,7 +14,7 @@ import { SolvarenError, randomToken } from '@solvaren/core';
 import { withConnection, inTransaction, type Sql } from '../db/client.js';
 import { writeAuditEvent } from '../db/audit-writer.js';
 import { loadDarajaClient } from '../services/daraja-config.js';
-import type { Env, ReconciliationQueueMessage } from '../env.js';
+import type { Env, ReconciliationQueueMessage, QueueBatch } from '../env.js';
 
 /**
  * Give up querying after this many attempts and escalate to a human.
@@ -28,11 +28,10 @@ const MAX_QUERY_ATTEMPTS = 8;
 const CALLBACK_GRACE_MINUTES = 10;
 
 export async function handleReconciliationBatch(
-  batch: MessageBatch<ReconciliationQueueMessage>,
+  batch: QueueBatch<ReconciliationQueueMessage>,
   env: Env,
-  ctx: ExecutionContext,
 ): Promise<void> {
-  await withConnection(env, ctx, async (sql) => {
+  await withConnection(env, async (sql) => {
     for (const message of batch.messages) {
       try {
         switch (message.body.type) {

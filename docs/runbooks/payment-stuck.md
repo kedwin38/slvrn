@@ -75,7 +75,7 @@ one.
    and that it resolves from outside your network.
 3. **Common cause: the WAF is blocking Safaricom.** If `safaricom_callback_ranges` in the
    Terraform configuration is out of date, legitimate callbacks are blocked at the edge
-   and never reach the Worker. Check the Cloudflare firewall event log for blocked POSTs
+   and never reach the service. Check the API logs for rejected POSTs
    to `/integrations/daraja/`. If they are there, clear the variable and re-apply — the
    per-organisation shared secret remains the control.
 4. The reconciliation sweep runs every five minutes and will resolve everything eventually,

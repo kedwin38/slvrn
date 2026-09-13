@@ -31,17 +31,16 @@ import { writeAuditEvent } from '../db/audit-writer.js';
 import { loadDarajaClient } from '../services/daraja-config.js';
 import { acquirePermit } from '../rate-limiter.js';
 import { loadFailureOverrides } from '../services/failure-map.js';
-import type { Env, PaymentQueueMessage, ReconciliationQueueMessage } from '../env.js';
+import type { Env, PaymentQueueMessage, ReconciliationQueueMessage, QueueBatch } from '../env.js';
 
 /** Guards against an instruction being retried indefinitely by the queue. */
 const MAX_EXECUTION_ATTEMPTS = 3;
 
 export async function handlePaymentBatch(
-  batch: MessageBatch<PaymentQueueMessage>,
+  batch: QueueBatch<PaymentQueueMessage>,
   env: Env,
-  ctx: ExecutionContext,
 ): Promise<void> {
-  await withConnection(env, ctx, async (sql) => {
+  await withConnection(env, async (sql) => {
     for (const message of batch.messages) {
       try {
         await executeInstruction(sql, env, message.body);
@@ -110,7 +109,7 @@ export async function executeInstruction(
   // Throttle before claiming anything. Exceeding the Daraja TPS contract returns
   // 500.003.03 for the whole burst, which would leave a run of payments in an ambiguous
   // state for no benefit — far better to wait our turn.
-  const permit = await acquirePermit(env.RATE_LIMITER, message.organizationId);
+  const permit = await acquirePermit(env.rateLimiter, message.organizationId);
   if (!permit.allowed) {
     throw providerError(
       'RATE_LIMIT_LOCAL',
@@ -534,7 +533,11 @@ async function enqueueReconciliation(
     organizationId: message.organizationId,
     correlationId: message.correlationId,
   };
-  await env.RECONCILIATION_QUEUE.send(payload, { delaySeconds: 120 });
+  // Delayed, because a transaction that has only just been submitted will not have a
+  // provider answer yet; querying immediately just burns a Transaction Status call.
+  await env.queue.send({ queue: 'reconciliation', body: payload }, undefined, {
+    delaySeconds: 120,
+  });
   console.info(
     JSON.stringify({
       level: 'info',

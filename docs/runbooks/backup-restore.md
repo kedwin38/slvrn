@@ -24,7 +24,7 @@ Backups → attempt history → note the object key of the backup you are valida
 it from your storage target:
 
 ```bash
-wrangler r2 object get solvaren-artifacts/<object-key> --file /tmp/snapshot.json
+aws s3 cp --endpoint-url "$S3_ENDPOINT" "s3://$S3_BUCKET/<object-key>" /tmp/snapshot.json
 ```
 
 ### 2. Verify integrity before trusting it
@@ -125,9 +125,9 @@ disaster-recovery evidence. An auditor will ask when the last successful restore
 
 The Backups screen shows failures as failures. Common causes:
 
-| Symptom                                       | Cause                                     | Action                                                                   |
-| --------------------------------------------- | ----------------------------------------- | ------------------------------------------------------------------------ |
-| `The storage target rejected the credentials` | Rotated or revoked access key             | Reconfigure the target; five consecutive failures suspend the schedule   |
-| Status `MISSED`                               | The scheduled window passed without a run | Check whether the Worker cron is firing; run a manual backup now         |
-| `SUCCESS` with `retentionComplete: false`     | Some old objects could not be deleted     | Storage permissions; the retained count is not guaranteed until resolved |
-| Repeated failures, then suspension            | Threshold reached                         | Deliberate. Correct the configuration, which clears the suspension       |
+| Symptom                                       | Cause                                     | Action                                                                     |
+| --------------------------------------------- | ----------------------------------------- | -------------------------------------------------------------------------- |
+| `The storage target rejected the credentials` | Rotated or revoked access key             | Reconfigure the target; five consecutive failures suspend the schedule     |
+| Status `MISSED`                               | The scheduled window passed without a run | Check whether the scheduler is firing (see below); run a manual backup now |
+| `SUCCESS` with `retentionComplete: false`     | Some old objects could not be deleted     | Storage permissions; the retained count is not guaranteed until resolved   |
+| Repeated failures, then suspension            | Threshold reached                         | Deliberate. Correct the configuration, which clears the suspension         |

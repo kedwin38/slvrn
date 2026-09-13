@@ -2,17 +2,23 @@
  * Per-organisation submission rate limiter (spec 10: "Rate limiting aligned to the active
  * Daraja contract and operational safety thresholds").
  *
- * A Durable Object rather than a counter in PostgreSQL or KV, because rate limiting needs
- * a single authoritative counter and Durable Objects are the only Cloudflare primitive
- * that gives strong consistency for one key. A KV-based limiter would let a burst of
- * Workers each read a stale count and collectively blow straight through the limit — which,
- * against Daraja, means `500.003.03` and a payroll stalled mid-run.
+ * A token bucket held in a PostgreSQL row and mutated under `SELECT ... FOR UPDATE`.
  *
- * Two limits are enforced together:
- *   - a **token bucket** for sustained throughput, matching the contracted TPS;
- *   - a **hard ceiling on in-flight submissions**, so a provider slowdown cannot silently
- *     accumulate thousands of unresolved payments.
+ * The requirement is a single authoritative counter per organisation. On Cloudflare that
+ * was a Durable Object, because it was the only primitive there offering strong consistency
+ * for one key. A locked row gives the same guarantee and gives it across however many
+ * replicas Railway is running — which matters more than it might appear: an in-process
+ * counter would look correct in testing and then silently double the effective rate the
+ * first time the service scaled to two instances. Against Daraja that means `500.003.03`
+ * for the whole burst and a payroll stalled mid-run.
+ *
+ * The refill is computed from elapsed time rather than accumulated by a timer, so there is
+ * no background job to run and a bucket that has not been touched for an hour is simply
+ * full when next read.
  */
+
+import type { Sql } from './db/client.js';
+import type { RateLimiter } from './env.js';
 
 export interface RateLimitRequest {
   /** Number of permits requested. One per payment submission. */
@@ -31,76 +37,95 @@ export interface RateLimitResponse {
   retryAfterMs: number;
 }
 
-interface BucketState {
-  tokens: number;
-  lastRefillMs: number;
-}
-
 /** Conservative defaults. Daraja does not publish a universal TPS; the contract governs. */
 const DEFAULT_RATE_PER_SECOND = 5;
 const DEFAULT_BURST = 20;
 
-export class OrganizationRateLimiter implements DurableObject {
-  private state: DurableObjectState;
-  private bucket: BucketState | null = null;
+export class PostgresRateLimiter implements RateLimiter {
+  constructor(private readonly pool: Sql) {}
 
-  constructor(state: DurableObjectState) {
-    this.state = state;
-  }
+  async acquire(
+    organizationId: string,
+    options: RateLimitRequest = {},
+  ): Promise<RateLimitResponse> {
+    const permits = Math.max(1, Math.min(options.permits ?? 1, 100));
+    const ratePerSecond = Math.max(0.1, options.ratePerSecond ?? DEFAULT_RATE_PER_SECOND);
+    const burst = Math.max(1, options.burst ?? DEFAULT_BURST);
 
-  async fetch(request: Request): Promise<Response> {
-    const body = (await request.json().catch(() => ({}))) as RateLimitRequest;
-    const permits = Math.max(1, Math.min(body.permits ?? 1, 100));
-    const ratePerSecond = Math.max(0.1, body.ratePerSecond ?? DEFAULT_RATE_PER_SECOND);
-    const burst = Math.max(1, body.burst ?? DEFAULT_BURST);
+    // The whole decision is one transaction: read the bucket under a row lock, refill it
+    // for elapsed time, and either spend the permits or refuse. Two workers submitting
+    // simultaneously serialise here rather than both seeing the same stale count.
+    return this.pool.begin(async (tx) => {
+      await tx`SET LOCAL statement_timeout = '5s'`;
 
-    const now = Date.now();
+      // Create the bucket full on first use, then lock whatever is there. `ON CONFLICT DO
+      // NOTHING` plus a following SELECT is deliberate: an UPSERT that wrote `tokens`
+      // would reset a live bucket to full on every call, which is a rate limiter that
+      // never limits.
+      await tx`
+        INSERT INTO rate_limit_buckets (organization_id, tokens, last_refill_at)
+        VALUES (${organizationId}, ${burst}, now())
+        ON CONFLICT (organization_id) DO NOTHING
+      `;
 
-    if (!this.bucket) {
-      this.bucket = (await this.state.storage.get<BucketState>('bucket')) ?? {
-        tokens: burst,
-        lastRefillMs: now,
-      };
-    }
+      const rows = await tx<{ tokens: number; elapsed_seconds: number }[]>`
+        SELECT tokens,
+               EXTRACT(EPOCH FROM (now() - last_refill_at))::double precision AS elapsed_seconds
+          FROM rate_limit_buckets
+         WHERE organization_id = ${organizationId}
+           FOR UPDATE
+      `;
 
-    // Refill by elapsed time, capped at the burst size.
-    const elapsedSeconds = Math.max(0, (now - this.bucket.lastRefillMs) / 1000);
-    this.bucket.tokens = Math.min(burst, this.bucket.tokens + elapsedSeconds * ratePerSecond);
-    this.bucket.lastRefillMs = now;
+      const current = rows[0];
+      if (!current) {
+        // The row was created above and is locked; its absence would mean someone deleted
+        // the organisation mid-call. Refuse rather than invent a permit.
+        return { allowed: false, remaining: 0, retryAfterMs: 1000 };
+      }
 
-    let response: RateLimitResponse;
+      const refilled = Math.min(
+        burst,
+        current.tokens + Math.max(0, current.elapsed_seconds) * ratePerSecond,
+      );
 
-    if (this.bucket.tokens >= permits) {
-      this.bucket.tokens -= permits;
-      response = { allowed: true, remaining: Math.floor(this.bucket.tokens), retryAfterMs: 0 };
-    } else {
-      const deficit = permits - this.bucket.tokens;
-      response = {
-        allowed: false,
-        remaining: Math.floor(this.bucket.tokens),
-        retryAfterMs: Math.ceil((deficit / ratePerSecond) * 1000),
-      };
-    }
+      if (refilled < permits) {
+        const shortfall = permits - refilled;
+        // Persist the refill even on refusal, so the elapsed time is not counted twice on
+        // the next call.
+        await tx`
+          UPDATE rate_limit_buckets
+             SET tokens = ${refilled}, last_refill_at = now(), updated_at = now()
+           WHERE organization_id = ${organizationId}
+        `;
+        return {
+          allowed: false,
+          remaining: Math.floor(refilled),
+          retryAfterMs: Math.ceil((shortfall / ratePerSecond) * 1000),
+        };
+      }
 
-    // Persisted so the limit survives isolate eviction. Without this, a restart would
-    // hand out a full burst immediately.
-    await this.state.storage.put('bucket', this.bucket);
+      const remaining = refilled - permits;
+      await tx`
+        UPDATE rate_limit_buckets
+           SET tokens = ${remaining}, last_refill_at = now(), updated_at = now()
+         WHERE organization_id = ${organizationId}
+      `;
 
-    return Response.json(response);
+      return { allowed: true, remaining: Math.floor(remaining), retryAfterMs: 0 };
+    });
   }
 }
 
-/** Client helper used by the payment executor. */
+/**
+ * Client helper used by the payment executor.
+ *
+ * Kept as a free function with the same name and shape as the Cloudflare version so the
+ * call site reads identically — the executor should not need to know what backs the limiter.
+ */
 export async function acquirePermit(
-  namespace: DurableObjectNamespace,
+  limiter: RateLimiter,
   organizationId: string,
   options: RateLimitRequest = {},
 ): Promise<RateLimitResponse> {
-  const id = namespace.idFromName(`rate:${organizationId}`);
-  const stub = namespace.get(id);
-  const response = await stub.fetch('https://rate-limiter.internal/acquire', {
-    method: 'POST',
-    body: JSON.stringify(options),
-  });
-  return (await response.json()) as RateLimitResponse;
+  return limiter.acquire(organizationId, options);
 }

@@ -119,7 +119,7 @@ async function recordInteraction(
   responseSummary: string,
 ): Promise<void> {
   const actor = actorOf(c);
-  await withConnection(c.env, c.executionCtx, async (sql) => {
+  await withConnection(c.env, async (sql) => {
     await sql`
       INSERT INTO ai_interactions (
         organization_id, user_id, capability, prompt_summary, context_digest,
@@ -144,7 +144,7 @@ aiRoutes.post('/batches/:id/analyse', requirePermissions('ai:batch_analysis'), a
   const actor = actorOf(c);
   const batchId = c.req.param('id');
 
-  const context = await withConnection(c.env, c.executionCtx, async (sql) => {
+  const context = await withConnection(c.env, async (sql) => {
     const batches = await sql<
       {
         batch_reference: string;
@@ -238,7 +238,7 @@ aiRoutes.post('/failures/explain', requirePermissions('ai:batch_analysis'), asyn
     })
     .parse(await c.req.json());
 
-  const context = await withConnection(c.env, c.executionCtx, async (sql) => {
+  const context = await withConnection(c.env, async (sql) => {
     const overrides = await loadFailureOverrides(sql, actor.organizationId);
 
     if (body.transactionId) {
@@ -312,7 +312,7 @@ aiRoutes.post('/analysis/expenditure', requirePermissions('ai:financial_analysis
   const actor = actorOf(c);
   const body = z.object({ question: z.string().trim().min(3).max(500) }).parse(await c.req.json());
 
-  const context = await withConnection(c.env, c.executionCtx, async (sql) => {
+  const context = await withConnection(c.env, async (sql) => {
     const cycles = await sql<{ period: string; total: string; recipients: string }[]>`
       SELECT date_trunc('month', t.completed_at AT TIME ZONE 'Africa/Nairobi')::DATE::text AS period,
              SUM(pi.amount_cents) AS total, COUNT(DISTINCT pi.recipient_id) AS recipients
@@ -371,7 +371,7 @@ Answer using only these figures. Quote the numbers you rely on. If the data does
 aiRoutes.post('/briefing', requirePermissions('ai:executive_intelligence'), async (c) => {
   const actor = actorOf(c);
 
-  const context = await withConnection(c.env, c.executionCtx, async (sql) => {
+  const context = await withConnection(c.env, async (sql) => {
     const months = await sql<{ period: string; total: string }[]>`
       SELECT date_trunc('month', t.completed_at AT TIME ZONE 'Africa/Nairobi')::DATE::text AS period,
              SUM(pi.amount_cents) AS total

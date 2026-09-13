@@ -21,7 +21,7 @@
 import { reference, formatCents } from '@solvaren/core';
 import { withConnection, inTransaction, type Sql } from '../db/client.js';
 import { writeAuditEvent } from '../db/audit-writer.js';
-import type { BackupQueueMessage, Env } from '../env.js';
+import type { BackupQueueMessage, Env, QueueBatch } from '../env.js';
 
 /** Tables included in a full logical snapshot, in dependency order for restoration. */
 const SNAPSHOT_TABLES = [
@@ -71,11 +71,10 @@ const EXCLUDED_COLUMNS: Record<string, string[]> = {
 };
 
 export async function handleBackupBatch(
-  batch: MessageBatch<BackupQueueMessage>,
+  batch: QueueBatch<BackupQueueMessage>,
   env: Env,
-  ctx: ExecutionContext,
 ): Promise<void> {
-  await withConnection(env, ctx, async (sql) => {
+  await withConnection(env, async (sql) => {
     for (const message of batch.messages) {
       try {
         if (message.body.type === 'RUN_BACKUP') {
@@ -179,9 +178,9 @@ export async function runBackup(sql: Sql, env: Env, message: BackupQueueMessage)
     const body = JSON.stringify(snapshot);
     const checksum = await sha256Hex(body);
 
-    await env.ARTIFACTS.put(objectKey, body, {
-      httpMetadata: { contentType: 'application/json', cacheControl: 'no-store' },
-      customMetadata: {
+    await env.objects.put(objectKey, body, {
+      contentType: 'application/json',
+      metadata: {
         attemptReference,
         organizationId: message.organizationId,
         checksumSha256: checksum,
@@ -190,7 +189,7 @@ export async function runBackup(sql: Sql, env: Env, message: BackupQueueMessage)
     });
 
     // Read back before claiming success: an object that is not retrievable is not a backup.
-    const verification = await env.ARTIFACTS.head(objectKey);
+    const verification = await env.objects.head(objectKey);
     if (!verification || verification.size === 0) {
       throw new Error('The backup object could not be verified after upload');
     }
@@ -312,7 +311,7 @@ export async function enforceRetention(
 
   for (const backup of surplus) {
     try {
-      await env.ARTIFACTS.delete(backup.object_key);
+      await env.objects.delete(backup.object_key);
       /*
        * The attempt row is never deleted — it is the evidence that the backup existed and
        * was retired — and the object key stays on it as the record of what was written.

@@ -52,7 +52,7 @@ batchRoutes.post('/', requirePermissions('batch:create'), async (c) => {
   const body = createBatchSchema.parse(await c.req.json());
   const correlationId = c.get('correlationId');
 
-  const batch = await withConnection(c.env, c.executionCtx, (sql) =>
+  const batch = await withConnection(c.env, (sql) =>
     inTransaction(sql, async (tx) => {
       const batchReference = reference('SLV');
       const rows = await tx<{ id: string; batch_reference: string; state: BatchState }[]>`
@@ -119,7 +119,7 @@ batchRoutes.post('/:id/upload', requirePermissions('batch:edit'), async (c) => {
   const upload = file as Blob & { name?: string };
   const text = await upload.text();
 
-  const result = await withConnection(c.env, c.executionCtx, (sql) =>
+  const result = await withConnection(c.env, (sql) =>
     inTransaction(sql, async (tx) => {
       await requireLock(tx, 'batch', batchId);
       const batch = await loadBatch(tx, actor.organizationId, batchId);
@@ -243,7 +243,7 @@ batchRoutes.post('/:id/validate', requirePermissions('batch:validate'), async (c
   const batchId = c.req.param('id');
   const correlationId = c.get('correlationId');
 
-  const result = await withConnection(c.env, c.executionCtx, (sql) =>
+  const result = await withConnection(c.env, (sql) =>
     inTransaction(sql, async (tx) => {
       await requireLock(tx, 'batch', batchId);
       const batch = await loadBatch(tx, actor.organizationId, batchId);
@@ -308,7 +308,7 @@ batchRoutes.post('/:id/submit', requirePermissions('batch:submit_to_l2'), async 
   const batchId = c.req.param('id');
   const correlationId = c.get('correlationId');
 
-  const result = await withConnection(c.env, c.executionCtx, (sql) =>
+  const result = await withConnection(c.env, (sql) =>
     inTransaction(sql, async (tx) => {
       await requireLock(tx, 'batch', batchId);
       const batch = await loadBatch(tx, actor.organizationId, batchId);
@@ -388,7 +388,7 @@ batchRoutes.post('/:id/approve', requirePermissions('batch:approve_to_l3'), asyn
   const body = decisionSchema.parse(await c.req.json().catch(() => ({})));
   const correlationId = c.get('correlationId');
 
-  const result = await withConnection(c.env, c.executionCtx, (sql) =>
+  const result = await withConnection(c.env, (sql) =>
     inTransaction(sql, async (tx) => {
       await requireLock(tx, 'batch', batchId);
       const batch = await loadBatch(tx, actor.organizationId, batchId);
@@ -502,7 +502,7 @@ batchRoutes.post('/:id/reject', requirePermissions('batch:reject'), async (c) =>
     );
   }
 
-  const result = await withConnection(c.env, c.executionCtx, (sql) =>
+  const result = await withConnection(c.env, (sql) =>
     inTransaction(sql, async (tx) => {
       await requireLock(tx, 'batch', batchId);
       const batch = await loadBatch(tx, actor.organizationId, batchId);
@@ -556,7 +556,7 @@ batchRoutes.post('/:id/hold', requirePermissions('batch:hold'), async (c) => {
   const body = decisionSchema.parse(await c.req.json().catch(() => ({})));
   const correlationId = c.get('correlationId');
 
-  const result = await withConnection(c.env, c.executionCtx, (sql) =>
+  const result = await withConnection(c.env, (sql) =>
     inTransaction(sql, async (tx) => {
       await requireLock(tx, 'batch', batchId);
       const batch = await loadBatch(tx, actor.organizationId, batchId);
@@ -605,7 +605,7 @@ batchRoutes.get('/', requirePermissions('batch:read'), async (c) => {
   const limit = Math.min(Number(url.searchParams.get('limit') ?? '50'), 200);
   const offset = Math.max(Number(url.searchParams.get('offset') ?? '0'), 0);
 
-  const data = await withConnection(c.env, c.executionCtx, async (sql) => {
+  const data = await withConnection(c.env, async (sql) => {
     const rows = await sql<
       {
         batch_id: string;
@@ -652,7 +652,7 @@ batchRoutes.get('/:id', requirePermissions('batch:read'), async (c) => {
   const actor = actorOf(c);
   const batchId = c.req.param('id');
 
-  const data = await withConnection(c.env, c.executionCtx, async (sql) => {
+  const data = await withConnection(c.env, async (sql) => {
     const batches = await sql<
       {
         id: string;

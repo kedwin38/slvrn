@@ -1,290 +1,219 @@
-# Deploying SOLVAREN
+# Deployment (Railway)
 
-This is the order operations should be performed in, and the reasoning behind the steps
-that are easy to get wrong. It assumes a Cloudflare account with Workers Paid (Queues,
-Durable Objects and Hyperdrive are not on the free plan), a managed PostgreSQL 16 instance,
-and a Safaricom Daraja account.
+SOLVAREN runs as two Railway services and one database:
 
-Nothing here requires SOLVAREN to hold a plaintext credential at rest. Where a secret is
-involved, the step says where it lives afterwards.
+| Service        | What it is                                                 | Image                 |
+| -------------- | ---------------------------------------------------------- | --------------------- |
+| `solvaren-api` | Hono HTTP API, the four queue consumers, and the scheduler | `apps/api/Dockerfile` |
+| `solvaren-web` | The console, static, behind nginx                          | `apps/web/Dockerfile` |
+| `Postgres`     | System of record, job queue, rate limiter                  | Railway PostgreSQL    |
 
----
-
-## 0. Before you begin
-
-**You need a Daraja production shortcode, and it takes time.** Safaricom's B2C API requires
-a Bulk Disbursement Account (or a paybill/till converted to a "one account" that can both
-receive and disburse). Applications go through
-[m-pesaforbusiness.co.ke](https://m-pesaforbusiness.co.ke/) or
-`M-PESABusiness@Safaricom.co.ke`, and approval is measured in weeks, not days. Start this
-before you start the technical work.
-
-**Decide the open questions in specification §28.** Three of them block deployment:
-
-| Decision                                                     | Why it blocks                                                 |
-| ------------------------------------------------------------ | ------------------------------------------------------------- |
-| PostgreSQL host and region                                   | Hyperdrive is configured against a specific connection string |
-| Whether administrative surfaces sit behind Cloudflare Access | Changes the Terraform apply and the operator onboarding       |
-| Whether financial data may reach the AI provider             | Determines whether `AI_API_KEY` is set at all                 |
-
-The remainder (approval thresholds, cooling-off duration, holiday calendar) are
-organisation policy and can be set through the console after go-live.
+Object storage is **not** on Railway. Railway has no S3 service, so backups go to any
+S3-compatible target you already have — Cloudflare R2, Backblaze B2, AWS S3, or MinIO run
+as a fourth Railway service. Spec BAK-001 always required an S3-compatible target, so this
+is not a concession.
 
 ---
 
-## 1. Database
+## Order matters
 
-Provision PostgreSQL 16 or later. SOLVAREN uses `pgcrypto`, `citext`, partial unique
-indexes, `EXCLUDE` constraints and `NULLS NOT DISTINCT` — all standard, none requiring an
-extension beyond the two named.
+Each step assumes the last one succeeded. The order is chosen so that a mistake is caught
+by a failed deploy rather than by a payment.
+
+### 1. PostgreSQL
+
+Add a PostgreSQL service to the project. Railway sets `DATABASE_URL` on services that
+reference it; use the **private** URL (`*.railway.internal`) so the database is never
+exposed to the public internet (spec 16.1).
+
+Confirm it is private:
 
 ```bash
-psql "$DATABASE_URL" -f db/migrations/0001_foundation.sql
-psql "$DATABASE_URL" -f db/migrations/0002_payments.sql
-psql "$DATABASE_URL" -f db/migrations/0003_audit_immutability.sql
-psql "$DATABASE_URL" -f db/migrations/0004_backups_exports.sql
-psql "$DATABASE_URL" -f db/migrations/0005_seed_failure_reasons.sql
-psql "$DATABASE_URL" -f db/migrations/0006_views.sql
+railway variables --service solvaren-api | grep DATABASE_URL
+# postgres://...@postgres.railway.internal:5432/railway   ← private, correct
+# postgres://...@viaduct.proxy.rlwy.net:12345/railway     ← public, do not use for the app
 ```
 
-Then verify the guarantees actually took effect:
+The public proxy URL is fine for `psql` during an incident. It is not fine as the
+application's `DATABASE_URL`.
+
+### 2. Object storage
+
+Create a bucket and a scoped key pair. The key needs `PutObject`, `GetObject`,
+`HeadObject` and `DeleteObject` on that bucket and nothing else — SOLVAREN never lists
+buckets and never touches another prefix.
+
+### 3. Secrets
+
+Generate each one. Do not reuse a value between them; `config.ts` refuses to start if
+`SESSION_SIGNING_KEY` and `SECRET_ENCRYPTION_KEY` match, because a leaked session key would
+then also decrypt every stored Daraja credential.
 
 ```bash
-SOLVAREN_TEST_DB=solvaren_verify scripts/db-test.sh <host> <port> <user>
+openssl rand -base64 48   # SESSION_SIGNING_KEY
+openssl rand -base64 48   # SECRET_ENCRYPTION_KEY
+openssl rand -base64 48   # CALLBACK_SHARED_SECRET
 ```
 
-That runs 45 assertions against a disposable copy of the schema — that a settled
-transaction cannot be re-settled, that an audit event cannot be deleted, that a batch
-creator cannot be recorded as its own approver. If any fails, stop: the immutability
-guarantees this platform rests on are not in place.
+Set them as Railway variables on `solvaren-api`. They are never committed; the invariant
+check fails the build if a secret is assigned a literal value in any Dockerfile,
+`railway.json` or workflow file.
 
-### Application database role
+### 4. API service variables
 
-Create a role that is **not** the owner of the tables. The immutability triggers block
-UPDATE and DELETE for every ordinary role, but a table owner can disable a trigger, and
-the Workers should not be able to.
+| Variable                 | Example                                     | Notes                                                       |
+| ------------------------ | ------------------------------------------- | ----------------------------------------------------------- |
+| `DATABASE_URL`           | `${{Postgres.DATABASE_URL}}`                | Railway reference, private host                             |
+| `SESSION_SIGNING_KEY`    | _(generated)_                               | ≥ 32 chars, refused otherwise                               |
+| `SECRET_ENCRYPTION_KEY`  | _(generated)_                               | ≥ 32 chars, must differ from the above                      |
+| `CALLBACK_SHARED_SECRET` | _(generated)_                               | Daraja callback authentication (§9.4)                       |
+| `ENVIRONMENT`            | `production`                                | `development` \| `staging` \| `production`                  |
+| `APP_ORIGIN`             | `https://app.solvaren.example`              | Must match the console's public URL exactly                 |
+| `API_BASE_URL`           | `https://api.solvaren.example`              | Used to build provider callback URLs                        |
+| `WEBAUTHN_RP_ID`         | `solvaren.example`                          | Must equal the `APP_ORIGIN` host or be a registrable parent |
+| `DARAJA_ENVIRONMENT`     | `sandbox`                                   | `production` is refused unless `ENVIRONMENT=production`     |
+| `S3_ENDPOINT`            | `https://s3.eu-central-003.backblazeb2.com` |                                                             |
+| `S3_BUCKET`              | `solvaren-backups`                          |                                                             |
+| `S3_REGION`              | `auto`                                      |                                                             |
+| `S3_ACCESS_KEY_ID`       | _(from step 2)_                             |                                                             |
+| `S3_SECRET_ACCESS_KEY`   | _(from step 2)_                             |                                                             |
+| `S3_FORCE_PATH_STYLE`    | `false`                                     | `true` for MinIO                                            |
+| `AI_API_KEY`             | _(optional)_                                | Omit to disable the AI layer entirely                       |
+| `RUN_WORKERS`            | `true`                                      | `false` for a web-only replica                              |
+| `RUN_SCHEDULER`          | `true`                                      | Safe on every replica; advisory-locked                      |
 
-```sql
-CREATE ROLE solvaren_app LOGIN PASSWORD '<generated>';
-GRANT CONNECT ON DATABASE solvaren TO solvaren_app;
-GRANT USAGE ON SCHEMA public TO solvaren_app;
-GRANT SELECT, INSERT, UPDATE ON ALL TABLES IN SCHEMA public TO solvaren_app;
-GRANT SELECT, DELETE ON payment_instructions TO solvaren_app;  -- editable batches only
-GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO solvaren_app;
+`PORT` is injected by Railway. Do not set it.
 
--- Deliberately NOT granted: DELETE on transactions, audit_events, approvals,
--- authorization_challenges, backup_attempts or export_records. The triggers already
--- refuse, and the grant removes the second way to try.
-```
+**The config validator is the gate.** Start the service with anything missing, weak, or
+internally inconsistent and it exits non-zero with the complete list, before binding a
+port. A failed deploy is cheap; a deploy that serves payments with no encryption key is
+not.
 
-Point Hyperdrive at this role, never at the owner.
+### 5. Deploy the API
 
----
+`railway.json` sets `preDeployCommand` to `node scripts/migrate.mjs`, so migrations run
+before the new image takes traffic. The migrator takes an advisory lock, so two replicas
+released together do not race, and it refuses to run if an already-applied migration file
+has been edited.
 
-## 2. Cloudflare resources
+Verify:
 
 ```bash
-# Queues, with a dead-letter queue for each. The DLQ is not optional: a message that
-# exhausts its retries carries a payment whose outcome is unknown, and it must land
-# somewhere an operator can find it.
-for q in payments callbacks reconciliation backups; do
-  wrangler queues create "solvaren-$q"
-  wrangler queues create "solvaren-$q-dlq"
-done
-
-# R2, for backups, encrypted secret envelopes and generated artefacts.
-wrangler r2 bucket create solvaren-artifacts
-
-# Hyperdrive, against the application role from step 1.
-wrangler hyperdrive create solvaren-production \
-  --connection-string "postgres://solvaren_app:<password>@<host>:5432/solvaren"
+curl -s https://<api-url>/health          # {"status":"ok"}
+curl -s https://<api-url>/health/ready    # {"status":"ready","databaseLatencyMs":N}
 ```
 
-Take the Hyperdrive id from the output and replace `REPLACE_WITH_PRODUCTION_HYPERDRIVE_ID`
-in `apps/api/wrangler.toml`.
+`/health/ready` reports `degraded` with HTTP 503 if the database is unreachable. It never
+echoes the driver's error text, because a connection string can appear in it.
 
----
+### 6. Deploy the console
 
-## 3. Secrets
+The API base URL is inlined at build time by Vite, so it is a **build** variable, not a
+runtime one:
 
-These are set with `wrangler secret put` and exist only as Worker bindings. None of them
-appears in `wrangler.toml`, in the database, or in any API response — `pnpm
-check:invariants` fails the build if one does.
+```
+VITE_API_BASE_URL=https://api.solvaren.example
+```
+
+Set it under the service's build variables, then deploy. If `APP_ORIGIN` on the API does
+not exactly match the console's public URL, every request fails CORS — that is the single
+most common way this deployment goes wrong, and the symptom (every call failing, no useful
+error) does not point at the cause.
+
+### 7. First administrator
 
 ```bash
-cd apps/api
-
-# 32+ bytes of entropy. Rotating this invalidates every live session, which is the
-# intended behaviour during an incident.
-openssl rand -base64 48 | wrangler secret put SESSION_SIGNING_KEY --env production
-
-# The master key for envelope-encrypting organisation secrets (Daraja credentials, S3
-# keys). Losing it makes every stored credential unrecoverable and every integration needs
-# reconfiguring — back it up in your organisation's key custody process before proceeding.
-openssl rand -base64 48 | wrangler secret put SECRET_ENCRYPTION_KEY --env production
-
-# Fallback shared secret for callbacks. Each organisation additionally gets its own,
-# generated when its integration is configured.
-openssl rand -base64 48 | wrangler secret put CALLBACK_SHARED_SECRET --env production
-
-# Optional. Omit entirely to disable the AI layer; the deterministic risk engine and the
-# failure dictionary are unaffected, and the AI endpoints degrade to returning the
-# deterministic findings alone.
-wrangler secret put AI_API_KEY --env production
+railway run --service solvaren-api node scripts/create-user.mjs \
+  --organization "Acme Holdings" --email ceo@acme.example --level L3
 ```
 
-> **On `SECRET_ENCRYPTION_KEY`:** it protects the Daraja credentials at rest in R2. If it
-> is lost, the ciphertext is unrecoverable by design — AES-GCM with a lost key is not
-> recoverable by anyone, including us. Store it in your organisation's existing key custody
-> arrangement before the first integration is configured, not after.
+Then enrol a security key immediately. L2 and L3 sessions are refused without WebAuthn, so
+an L3 account without a key cannot do anything.
 
----
+### 8. Daraja
 
-## 4. Deploy
+Configure through the console (L3 only). The callback URL must be
+`https://<api-url>/integrations/daraja/<organization-id>/...` and must be HTTPS — the
+database refuses a plaintext callback URL by CHECK constraint.
+
+### 9. Backup, and then a restore
+
+A backup that has never been restored is a file, not a backup:
 
 ```bash
-pnpm install --frozen-lockfile
-pnpm verify              # format, lint, types, invariants, tests, database assertions
-
-pnpm --filter @solvaren/api deploy:production
-pnpm --filter @solvaren/web build
-pnpm --filter @solvaren/web deploy:production
+railway run --service solvaren-api node scripts/restore-snapshot.mjs \
+  --snapshot /tmp/snapshot.json --database "$SCRATCH_DATABASE_URL"
 ```
 
-`pnpm verify` is not ceremony. It runs the 45 database assertions and the 29 source
-invariants, both of which check properties that a passing unit test would not catch.
+Restore into a scratch database. The script refuses to run against a database that already
+holds transactions unless forced. See [the runbook](runbooks/backup-restore.md) for what to
+verify afterwards — a restore that loads rows but breaks the audit chain has not worked.
 
 ---
 
-## 5. Edge configuration
+## What changed from the Cloudflare deployment
 
-```bash
-cd infra/terraform
-terraform init
-terraform plan  -var-file=production.tfvars
-terraform apply -var-file=production.tfvars
-```
+Worth reading if you knew the previous architecture, because two of these are behaviour
+changes rather than swaps.
 
-`production.tfvars` holds zone and account ids and the administrator email list. It is not
-committed. `CLOUDFLARE_API_TOKEN` comes from the environment.
+| Was                    | Now                      | Note                                   |
+| ---------------------- | ------------------------ | -------------------------------------- |
+| Worker `fetch`         | `@hono/node-server`      | Same Hono app, unchanged routes        |
+| Hyperdrive             | `postgres.js` pool       | Pool is process-wide; `max: 10`        |
+| Cloudflare Queues      | `job_queue` table        | **Stronger**: enqueue is transactional |
+| Durable Object limiter | `rate_limit_buckets` row | Correct across replicas                |
+| Cron triggers          | In-process timers        | **Needs the advisory lock**; see below |
+| R2 binding             | S3 API (SigV4)           | Any S3-compatible target               |
+| Secrets Store          | Railway variables        | Validated at boot                      |
+| Pages `_headers`       | `apps/web/nginx.conf`    | Asserted by the invariant check        |
+| WAF / rate limiting    | Application-level only   | **This is a real loss**; see below     |
 
-**On `safaricom_callback_ranges`:** leave it empty unless you have the current ranges from
-`apisupport@safaricom.co.ke`. An out-of-date list silently blocks legitimate callbacks,
-and Daraja does not retry a rejected delivery — the payment result is simply lost until
-the reconciliation sweep picks it up. The callback endpoint authenticates by per-
-organisation shared secret regardless, so an empty list degrades to "the application
-check is doing the work", which is an acceptable posture.
+### Scheduled jobs need the lock
 
----
+Cloudflare guaranteed a cron fired once per schedule. Railway does not: every replica runs
+every timer. `scheduler.ts` takes `pg_try_advisory_lock` before each run and the losers
+return immediately. **If you scale the API past one replica, that lock is the only thing
+preventing duplicated reconciliation sweeps**, so do not remove it.
 
-## 6. First organisation and Level 3 account
+### The edge is gone
 
-There is deliberately no self-service signup: SOLVAREN is a controlled-tenancy platform.
-The first L3 account is created directly.
+There is no WAF, no managed DDoS protection, no Cloudflare Access on `/health/*`, and no
+edge rate limiting. What remains is in the application: per-organisation throttling, the
+sign-in attempt limits, body-size caps and export limits.
 
-```sql
-INSERT INTO organizations (id, name, slug) VALUES (gen_random_uuid(), 'Acme Holdings', 'acme');
-INSERT INTO policies (organization_id) SELECT id FROM organizations WHERE slug = 'acme';
-```
-
-Then create the user with a generated Argon2id hash (the console's enrolment flow is the
-normal path; this is the bootstrap):
-
-```bash
-node --experimental-strip-types scripts/create-user.mjs \
-  --organization acme --email ceo@acme.test --name "Amina Njeri" --level L3
-```
-
-The account is created `PENDING_ENROLMENT`. It cannot sign in until a WebAuthn
-authenticator is registered and an authorization PIN is set — the schema's
-`users_privileged_requires_pin` constraint refuses to mark an L2 or L3 account ACTIVE
-without a PIN, and `issueSession` refuses to issue a usable session for an L2/L3 account
-that has not completed WebAuthn.
-
-**Register two authenticators, not one.** An L3 account is the only thing that can release
-a payment, and a single lost security key with no second authenticator means a controlled
-administrative recovery — which is deliberately slow (spec §8.3).
+For an internet-facing production deployment, put something in front — Cloudflare in proxy
+mode over the Railway domain is the least-change option and keeps the edge controls the
+threat model assumes. Until then, the threat model's denial-of-service row is materially
+weaker than it was. This is stated in `docs/threat-model.md` rather than left implicit.
 
 ---
 
-## 7. Daraja integration
+## Splitting workers from the API
 
-Performed in the console, by an L3 user, at **Settings → Daraja**. Three things to know:
+One process runs everything by default. To separate them, deploy the same image twice:
 
-1. **Create the API operator on the M-PESA portal first.** It needs the
-   `ORG B2C API Initiator` role, assigned by a Business Administrator, and its password
-   set by a user holding `Set Restricted ORG API PASSWORD`. Until the password is set the
-   operator is "pending active" and every payment fails with result code `2001`.
+|                 | API replica | Worker replica |
+| --------------- | ----------- | -------------- |
+| `RUN_WORKERS`   | `false`     | `true`         |
+| `RUN_SCHEDULER` | `false`     | `true`         |
+| Public domain   | yes         | no             |
 
-2. **The portal password character rules are real.** Safaricom permits only `#`, `&`, `%`
-   and `$` as special characters, and handles `@` and `.` inconsistently. SOLVAREN
-   validates this at configuration time so the constraint is discovered now rather than
-   during a payroll run.
-
-3. **You can avoid giving SOLVAREN the initiator password at all.** Generate the
-   `SecurityCredential` on the Daraja portal's password-encryption tool and paste that
-   instead; SOLVAREN recognises a pre-computed credential and stores it as-is. Otherwise,
-   supply the password together with the M-PESA public certificate and SOLVAREN encrypts
-   it once, stores the ciphertext, and discards the password.
-
-Then **Test connection** before enabling. The database refuses to set an integration to
-`ENABLED` without a passing test on record (`daraja_enabled_requires_passing_test`), which
-means a credential problem surfaces during setup rather than mid-payroll.
-
-Register the callback URLs the configuration screen displays with Safaricom. They embed
-the organisation id and a per-organisation secret; the secret is generated on save and is
-never displayed again.
+Both read the same code and the same database, so this is a deployment decision rather than
+a rewrite. The queue is in PostgreSQL, so the worker replica needs no additional service.
 
 ---
 
-## 8. Backups
+## Go-live checklist
 
-At **Settings → Backups**, connect an S3-compatible target, test the connection, then
-enable the schedule. The schedule cannot be enabled against an untested target
-(`backup_schedule_requires_test`).
-
-**Run a restore before you rely on it.** A backup that has never been restore-validated is
-not disaster-recovery proven, and the console says so on the screen. See
-[`runbooks/backup-restore.md`](runbooks/backup-restore.md).
-
----
-
-## 9. Go-live checklist
-
-Verified, not assumed:
-
-- [ ] `scripts/db-test.sh` passes all 45 assertions against the production schema
-- [ ] `pnpm check:invariants` passes all 31 checks on the deployed commit
-- [ ] The application database role is not the table owner
-- [ ] `SECRET_ENCRYPTION_KEY` is in key custody
-- [ ] Every L3 account has **two** registered authenticators and an authorization PIN
-- [ ] Daraja connection test passes against the **production** environment
-- [ ] Callback URLs are registered with Safaricom and a test callback has been received
-- [ ] A backup has run, and a restore has been performed into a scratch database
-- [ ] Terraform applied; the WAF rules are visible in the Cloudflare dashboard
-- [ ] Organisation policy limits are set to the organisation's real thresholds, not defaults
-- [ ] The finance team has walked through one sandbox payroll end to end, including a
-      deliberate failure, and has downloaded the failed-transactions CSV
-
-The last item matters more than it looks. The first time an operator sees the release
-ceremony should not be with real money on the other side of it.
-
----
-
-## Rollback
-
-Workers and Pages both keep prior deployments:
-
-```bash
-wrangler deployments list --name solvaren-api
-wrangler rollback --name solvaren-api --message "Reverting <reason>"
-```
-
-**Database migrations are forward-only.** The schema is append-only by design and the
-immutability triggers mean a "down" migration would have to disable them, which is exactly
-the capability the design removes. A schema change that proves wrong is corrected by a new
-migration, not by reversing the old one.
-
-A rollback of the Worker against a newer schema is safe: every migration so far is additive.
-A rollback across a migration that _removed_ something would not be, so such a migration
-should be split into two releases — stop using the column in one, drop it in the next.
+- [ ] `DATABASE_URL` uses the private `*.railway.internal` host
+- [ ] `SESSION_SIGNING_KEY` and `SECRET_ENCRYPTION_KEY` are distinct and freshly generated
+- [ ] `APP_ORIGIN` exactly matches the console's public URL
+- [ ] `WEBAUTHN_RP_ID` is the `APP_ORIGIN` host or a registrable parent of it
+- [ ] `DARAJA_ENVIRONMENT=production` only where `ENVIRONMENT=production`
+- [ ] `pnpm verify` passes on the deployed commit (350 tests, 53 DB assertions, 34 invariants)
+- [ ] `/health/ready` returns `ready`
+- [ ] The first L3 account has a security key enrolled
+- [ ] A backup has been taken **and restored into a scratch database**
+- [ ] Something is in front of the API providing WAF and DDoS protection
+- [ ] Spec §28 open decisions are answered: database region, whether financial data may
+      reach the AI provider, RPO/RTO targets

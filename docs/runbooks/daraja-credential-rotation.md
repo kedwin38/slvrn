@@ -91,7 +91,9 @@ them in Terraform:
 1. Request the current list from `apisupport@safaricom.co.ke`.
 2. Update `safaricom_callback_ranges` in `production.tfvars`.
 3. `terraform plan` and `terraform apply`.
-4. Watch the Cloudflare firewall event log for blocked POSTs to `/integrations/daraja/`
+4. Watch the API logs for rejected POSTs to `/integrations/daraja/` — a wrong shared
+   secret is recorded as a CRITICAL security event, and returns 200 so an attacker cannot
+   tell a wrong secret from a right one
    over the next hour. Blocked legitimate callbacks are lost — Safaricom does not retry —
    and would surface as a wave of TIMEOUT transactions.
 

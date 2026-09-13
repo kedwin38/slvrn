@@ -398,6 +398,70 @@ BEGIN
 END $$;
 
 -- ---------------------------------------------------------------------------
+-- Job queue (§16, migration 0008)
+--
+-- The queue now carries payment intent, so it gets the same treatment as the ledger: a
+-- terminal job cannot be reopened, and a queued payload cannot be rewritten.
+-- ---------------------------------------------------------------------------
+
+SELECT assert_allowed($$
+    INSERT INTO job_queue (id, queue, body, organization_id, correlation_id, max_attempts)
+    VALUES ('00000000-0000-0000-0000-00000000bc01'::uuid, 'payments',
+            '{"instructionId":"ins-queue-1","organizationId":"o","correlationId":"c"}'::jsonb,
+            '00000000-0000-0000-0000-0000000000a1', 'cor-queue-1', 3)
+$$, 'a legitimate job is accepted');
+
+SELECT assert_refused($$
+    INSERT INTO job_queue (queue, body, organization_id, correlation_id, max_attempts, status, dead_lettered_at)
+    VALUES ('payments', '{"instructionId":"ins-queue-2"}'::jsonb,
+            '00000000-0000-0000-0000-0000000000a1', 'cor-queue-2', 3, 'DEAD_LETTERED', now())
+$$, 'a dead-lettered job must record why it was abandoned');
+
+SELECT assert_refused($$
+    INSERT INTO job_queue (queue, body, organization_id, correlation_id, max_attempts, status)
+    VALUES ('payments', '{"instructionId":"ins-queue-3"}'::jsonb,
+            '00000000-0000-0000-0000-0000000000a1', 'cor-queue-3', 3, 'IN_FLIGHT')
+$$, 'an in-flight job must carry the lease that makes a dead worker recoverable');
+
+SELECT assert_refused($$
+    INSERT INTO job_queue (queue, body, organization_id, correlation_id, max_attempts)
+    VALUES ('not-a-real-queue', '{}'::jsonb,
+            '00000000-0000-0000-0000-0000000000a1', 'cor-queue-4', 3)
+$$, 'a job cannot be routed to a queue no consumer reads');
+
+-- Two live jobs for one payment instruction would be two submissions of one payment.
+SELECT assert_refused($$
+    INSERT INTO job_queue (queue, body, organization_id, correlation_id, max_attempts)
+    VALUES ('payments', '{"instructionId":"ins-queue-1","organizationId":"o","correlationId":"c"}'::jsonb,
+            '00000000-0000-0000-0000-0000000000a1', 'cor-queue-5', 3)
+$$, 'a payment instruction cannot have two live jobs at once');
+
+-- The payload is what the executor re-verifies its fingerprint against. Rewriting it in
+-- place is the tamper path the fingerprint check exists to catch; the database refuses it
+-- outright.
+SELECT assert_refused($$
+    UPDATE job_queue SET body = '{"instructionId":"ins-swapped"}'::jsonb
+     WHERE id = '00000000-0000-0000-0000-00000000bc01'::uuid
+$$, 'the payload of a queued job cannot be rewritten');
+
+SELECT assert_refused($$
+    UPDATE job_queue SET queue = 'backups'
+     WHERE id = '00000000-0000-0000-0000-00000000bc01'::uuid
+$$, 'a queued job cannot be moved to another queue');
+
+-- A terminal job coming back to life would re-submit a payment that already settled.
+DO $$
+BEGIN
+    UPDATE job_queue SET status = 'SUCCEEDED', completed_at = now()
+     WHERE id = '00000000-0000-0000-0000-00000000bc01'::uuid;
+END $$;
+
+SELECT assert_refused($$
+    UPDATE job_queue SET status = 'PENDING'
+     WHERE id = '00000000-0000-0000-0000-00000000bc01'::uuid
+$$, 'a settled job cannot be reopened and paid again');
+
+-- ---------------------------------------------------------------------------
 -- Tenant scoping: every tenant-owned table carries organization_id NOT NULL
 -- ---------------------------------------------------------------------------
 DO $$
@@ -406,7 +470,16 @@ BEGIN
     SELECT string_agg(t.table_name, ', ') INTO missing
       FROM information_schema.tables t
      WHERE t.table_schema = 'public' AND t.table_type = 'BASE TABLE'
-       AND t.table_name NOT IN ('organizations', 'batch_editors', 'failure_reason_map', 'security_events')
+       -- The exclusions are global-scope tables, each for a stated reason:
+       --   organizations       is the tenant itself
+       --   batch_editors       is scoped transitively through its batch
+       --   failure_reason_map  is a shared dictionary with per-org overrides elsewhere
+       --   security_events     records events that may precede knowing the tenant
+       --   scheduled_job_runs  is one row per cluster-wide daily job, not per tenant
+       AND t.table_name NOT IN (
+           'organizations', 'batch_editors', 'failure_reason_map', 'security_events',
+           'scheduled_job_runs'
+       )
        AND NOT EXISTS (
            SELECT 1 FROM information_schema.columns c
             WHERE c.table_schema = 'public' AND c.table_name = t.table_name

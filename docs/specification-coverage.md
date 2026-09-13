@@ -25,7 +25,7 @@ Run `pnpm verify` to execute everything referenced here.
 | L2 cannot release; L3 cannot perform the L2 approval | `rbac.ts`                                        | **Verified** — `rbac.test.ts` asserts both directions                                        |
 | L3-only Daraja, users, policies, security, backups   | `rbac.ts`, `routes/admin.ts`                     | **Verified** — `routes.test.ts` asserts 403 for L1 and L2 at the HTTP layer                  |
 | Non-active account holds no permission               | `rbac.ts` `hasPermission`                        | **Verified** — every permission checked for DISABLED and LOCKED                              |
-| §4.3 "Even L3 cannot" — alter history, force SUCCESS | `db/migrations/0003` triggers                    | **Verified** — `db/tests/immutability.sql`, 45 assertions                                    |
+| §4.3 "Even L3 cannot" — alter history, force SUCCESS | `db/migrations/0003` triggers                    | **Verified** — `db/tests/immutability.sql`, 53 assertions                                    |
 | Tenant isolation                                     | `rbac.ts` `requireSameOrganization`, every query | **Verified** — `routes.test.ts` cross-tenant batch returns 404 without leaking the reference |
 
 ## §5 — Batch lifecycle
@@ -116,7 +116,7 @@ Run `pnpm verify` to execute everything referenced here.
 | NFR-SEC-001  | Privileged endpoints deny by default            | **Verified** — HTTP-level 403 assertions                                                                                         |
 | NFR-SEC-003  | No secrets in logs, bundles or ordinary columns | **Verified** — `check-invariants.sh`, redaction tests, masked-response test                                                      |
 | NFR-REL-002  | Ambiguous outcomes reconcile, never duplicate   | **Verified**                                                                                                                     |
-| NFR-DATA-001 | Historical records append-only                  | **Verified** — 45 database assertions                                                                                            |
+| NFR-DATA-001 | Historical records append-only                  | **Verified** — 53 database assertions                                                                                            |
 | NFR-OPS-002  | Status pages responsive at scale                | **Implemented** — server-side pagination and an index per sort column; not load-tested                                           |
 | NFR-A11Y-001 | Keyboard navigation, contrast, clear errors     | **Implemented** — focus management, a focus trap on the ceremony, status never by colour alone; not audited with a screen reader |
 
@@ -144,10 +144,10 @@ Run `pnpm verify` to execute everything referenced here.
 ## Measured, not claimed
 
 ```
-313 tests                         pnpm test
- 45 database assertions           pnpm db:test
- 31 source invariants             pnpm check:invariants
-63.7% statement coverage overall  pnpm test:coverage
+350 tests                         pnpm test
+ 53 database assertions           pnpm db:test
+ 34 source invariants             pnpm check:invariants
+63.6% statement coverage overall  pnpm test:coverage
 ```
 
 Coverage is uneven by design. The modules that decide whether money moves are at or near

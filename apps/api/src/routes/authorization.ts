@@ -13,7 +13,6 @@ import { z } from 'zod';
 import { verifyAuthenticationResponse } from '@simplewebauthn/server';
 import {
   formatCents,
-  instructionFingerprint,
   authenticationError,
   notFoundError,
   isValidIdempotencyKey,
@@ -32,7 +31,7 @@ import {
   releaseBatch,
   abandonCeremony,
 } from '../services/authorization.js';
-import type { AppContext, PaymentQueueMessage } from '../env.js';
+import type { AppContext } from '../env.js';
 
 export const authorizationRoutes = new Hono<AppContext>();
 
@@ -54,7 +53,7 @@ authorizationRoutes.post(
     const actor = actorOf(c);
     const batchId = c.req.param('id');
 
-    const result = await withConnection(c.env, c.executionCtx, (sql) =>
+    const result = await withConnection(c.env, (sql) =>
       openAuthorizationCeremony({
         sql,
         actor,
@@ -114,7 +113,7 @@ authorizationRoutes.post(
       );
     }
 
-    const outcome = await withConnection(c.env, c.executionCtx, async (sql) => {
+    const outcome = await withConnection(c.env, async (sql) => {
       // ---- Verify the WebAuthn assertion over the ceremony challenge --------
       const challenges = await sql<
         { webauthn_challenge: string; authorizer_user_id: string; consumed_at: string | null }[]
@@ -229,54 +228,9 @@ authorizationRoutes.post(
         securityContext: c.get('securityContext'),
       });
 
-      // ---- Enqueue execution -------------------------------------------------
-      // After the release transaction has committed, so a rollback cannot leave payment
-      // messages on the queue for a batch that was never actually authorized.
-      const instructions = await sql<
-        { id: string; msisdn_snapshot: string; amount_cents: string }[]
-      >`
-      SELECT id, msisdn_snapshot, amount_cents
-        FROM payment_instructions WHERE batch_id = ${batchId} ORDER BY id
-    `;
-      const batchVersionRows = await sql<{ version: number }[]>`
-      SELECT version FROM payment_batches WHERE id = ${batchId}
-    `;
-      const batchVersion = batchVersionRows[0]!.version;
-
-      const messages: { body: PaymentQueueMessage }[] = [];
-      for (const instruction of instructions) {
-        messages.push({
-          body: {
-            type: 'EXECUTE_INSTRUCTION',
-            organizationId: actor.organizationId,
-            batchId,
-            instructionId: instruction.id,
-            batchVersion,
-            manifestHash: released.manifestHash,
-            fingerprint: await instructionFingerprint({
-              organizationId: actor.organizationId,
-              batchId,
-              instructionId: instruction.id,
-              batchVersion,
-              msisdn: instruction.msisdn_snapshot,
-              amountCents: Number(instruction.amount_cents),
-              manifestHash: released.manifestHash,
-            }),
-            challengeId: body.challengeId,
-            correlationId,
-            attempt: 0,
-          },
-        });
-      }
-
-      // Cloudflare Queues caps a batch send at 100 messages.
-      for (let i = 0; i < messages.length; i += 100) {
-        await c.env.PAYMENT_QUEUE.sendBatch(messages.slice(i, i + 100));
-      }
-
-      await sql`
-      UPDATE payment_batches SET state = 'QUEUED' WHERE id = ${batchId} AND state = 'AUTHORIZED'
-    `;
+      // Execution is enqueued inside the release transaction (see releaseBatch), so there
+      // is nothing to do here. Doing it from the route would reintroduce the window where
+      // a batch is authorized but its payments were never queued.
 
       return released;
     });
@@ -308,7 +262,7 @@ authorizationRoutes.post(
       .object({ reason: z.string().trim().max(500).optional() })
       .parse(await c.req.json().catch(() => ({})));
 
-    await withConnection(c.env, c.executionCtx, (sql) =>
+    await withConnection(c.env, (sql) =>
       abandonCeremony({
         sql,
         actor,

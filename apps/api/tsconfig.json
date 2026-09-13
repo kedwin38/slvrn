@@ -1,7 +1,10 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "types": ["@cloudflare/workers-types"],
+    "lib": ["ES2023"],
+    "types": ["node"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
     "noEmit": true,
     "paths": {
       "@solvaren/core": ["../../packages/core/src/index.ts"],

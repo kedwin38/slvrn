@@ -1,0 +1,22 @@
+{
+  // Production build.
+  //
+  // Compiles ONLY this app. `@solvaren/core` and `@solvaren/daraja` are built by their own
+  // packages and resolved through node_modules at runtime, so their sources are not
+  // recompiled here — an earlier version did include them, which both duplicated the output
+  // and quietly compiled their test files into the image.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "outDir": "dist",
+    "rootDir": "src",
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": true,
+    // Resolve the workspace packages the way Node will at runtime, rather than through the
+    // source-path aliases used for typechecking.
+    "paths": {}
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["src/**/*.test.ts", "src/test-harness.ts"]
+}

@@ -1,5 +1,5 @@
 /**
- * Database access through Cloudflare Hyperdrive.
+ * Database access.
  *
  * Three rules this module exists to enforce:
  *
@@ -7,16 +7,18 @@
  *     every value as a bind parameter. The one place user input influences SQL *text* is
  *     the explorer's ORDER BY, and that goes through the closed allowlist in
  *     `@solvaren/core` — there is no string concatenation of user input anywhere.
- *  2. **Tenant scoping is not optional.** `tenantScope` wraps a connection with the acting
- *     organisation so that helpers cannot accidentally issue an unscoped query.
- *  3. **Connections are per-request.** A Worker isolate may be reused across requests for
- *     different organisations; holding a connection across that boundary would be a
- *     cross-tenant hazard, so the connection is created per request and closed after.
+ *  2. **Tenant scoping is not optional.** Every query carries the acting organisation, and
+ *     the schema requires a NOT NULL `organization_id` on every tenant-owned table.
+ *  3. **Connections come from one pool and are returned to it.** On Cloudflare this module
+ *     opened a socket per request because a Worker isolate could be reused across
+ *     organisations and holding a connection across that boundary was a cross-tenant
+ *     hazard. A Node process has no such boundary: the pool is process-wide, checkout is
+ *     per query, and a connection never carries session state between callers — nothing
+ *     here issues SET (outside a transaction's SET LOCAL), LISTEN, or a temp table.
  */
 
 import postgres from 'postgres';
 import { internalError } from '@solvaren/core';
-import type { Env } from '../env.js';
 
 /**
  * A postgres.js client with no custom type extensions.
@@ -26,49 +28,82 @@ import type { Env } from '../env.js';
  */
 export type Sql = postgres.Sql<Record<string, never>>;
 
+export interface PoolOptions {
+  /** Maximum pooled connections. Keep below the database's own limit. */
+  max?: number;
+  /** Require TLS. Railway's managed PostgreSQL terminates TLS on its proxy. */
+  ssl?: boolean;
+}
+
 /**
- * Open a connection for the lifetime of one request or queue batch.
+ * Create the process-wide connection pool.
  *
- * `max: 1` is deliberate: Hyperdrive already pools on the Cloudflare side, and a Worker
- * isolate holding several sockets fights that pool rather than helping it.
+ * Called once at boot. `max` defaults to 10, which is comfortably inside Railway's
+ * PostgreSQL connection limit while leaving headroom for a second replica and for the
+ * occasional `psql` session during an incident — a pool sized to the database's exact
+ * maximum is a pool that locks the operator out of their own database at 3am.
  */
-export function createConnection(env: Env): Sql {
-  return postgres(env.HYPERDRIVE.connectionString, {
-    max: 1,
+export function createPool(databaseUrl: string, options: PoolOptions = {}): Sql {
+  const useSsl = options.ssl ?? shouldUseSsl(databaseUrl);
+  return postgres(databaseUrl, {
+    max: options.max ?? 10,
     fetch_types: false, // saves a round trip per connection; all our types are standard
-    idle_timeout: 20,
+    idle_timeout: 30,
     connect_timeout: 10,
-    prepare: false, // Hyperdrive pools connections; named prepared statements do not survive
+    max_lifetime: 60 * 30,
     transform: { undefined: null },
-    onnotice: () => {}, // suppress PostgreSQL NOTICEs from reaching Worker logs
+    onnotice: () => {}, // suppress PostgreSQL NOTICEs from reaching the application log
+    ...(useSsl ? { ssl: { rejectUnauthorized: false } } : {}),
   });
 }
 
 /**
- * Run a function with a connection, closing it afterwards even on failure.
- * `ctx.waitUntil` is used for the close so the response is not delayed by socket teardown.
+ * Decide whether to negotiate TLS.
+ *
+ * Railway's internal network (`*.railway.internal`) is private and its PostgreSQL image
+ * does not present a certificate there, so TLS is negotiated only for external hosts. A
+ * local development database is likewise plaintext. Anything else gets TLS.
+ *
+ * `rejectUnauthorized: false` above is deliberate and worth understanding: managed
+ * PostgreSQL providers, Railway included, present certificates signed by their own internal
+ * CA. Verification would fail against the public trust store. The connection is still
+ * encrypted; what is not verified is the server's identity, and on Railway's private
+ * network that identity is established by the network itself.
+ */
+function shouldUseSsl(databaseUrl: string): boolean {
+  try {
+    const { hostname, searchParams } = new URL(databaseUrl);
+    const sslmode = searchParams.get('sslmode');
+    if (sslmode === 'disable') return false;
+    if (sslmode && sslmode !== 'prefer') return true;
+    if (hostname === 'localhost' || hostname === '127.0.0.1') return false;
+    if (hostname.endsWith('.railway.internal')) return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Run a function against the pool.
+ *
+ * Retained as a named helper rather than passing `env.sql` around directly because it is
+ * the seam every route already goes through, and because it keeps one place to add
+ * per-request instrumentation.
  */
 export async function withConnection<T>(
-  env: Env,
-  ctx: { waitUntil(promise: Promise<unknown>): void } | null,
+  env: { sql: Sql },
   fn: (sql: Sql) => Promise<T>,
 ): Promise<T> {
-  const sql = createConnection(env);
-  try {
-    return await fn(sql);
-  } finally {
-    const closing = sql.end({ timeout: 5 }).catch(() => {});
-    if (ctx) ctx.waitUntil(closing);
-    else await closing;
-  }
+  return fn(env.sql);
 }
 
 /**
  * Execute inside a transaction with a statement timeout.
  *
  * The timeout matters on a payment platform: a query that hangs while holding row locks on
- * a batch blocks every other worker touching it, and Cloudflare will kill the isolate long
- * before PostgreSQL notices. Ten seconds is generous for every statement we issue.
+ * a batch blocks every other worker touching it. Ten seconds is generous for every
+ * statement we issue, and a statement that exceeds it is a bug worth surfacing.
  */
 export async function inTransaction<T>(sql: Sql, fn: (tx: Sql) => Promise<T>): Promise<T> {
   return sql.begin(async (tx) => {
@@ -81,9 +116,9 @@ export async function inTransaction<T>(sql: Sql, fn: (tx: Sql) => Promise<T>): P
 }
 
 /**
- * Take a transaction-scoped advisory lock, so that two Workers cannot process the same
+ * Take a transaction-scoped advisory lock, so that two workers cannot process the same
  * batch, backup or reconciliation case concurrently. Released automatically at commit or
- * rollback — there is no lock to leak if the isolate dies.
+ * rollback — there is no lock to leak if the process dies.
  */
 export async function acquireLock(tx: Sql, namespace: string, id: string): Promise<boolean> {
   const rows = await tx<{ acquired: boolean }[]>`
@@ -105,7 +140,7 @@ export async function requireLock(tx: Sql, namespace: string, id: string): Promi
 /*
  * Binding lists of UUIDs.
  *
- * `fetch_types: false` on the connection saves a round trip per connection but disables the
+ * `fetch_types: false` on the pool saves a round trip per connection but disables the
  * driver's array-OID inference, so a plain `${ids}::uuid[]` is serialised as a bare
  * comma-joined string that PostgreSQL rejects as a malformed array literal. Passing the
  * list as JSON and expanding it server-side is correct either way, handles the empty list,

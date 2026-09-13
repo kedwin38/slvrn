@@ -27,21 +27,8 @@ import { dashboardRoutes } from './routes/dashboard.js';
 import { adminRoutes } from './routes/admin.js';
 import { aiRoutes } from './routes/ai.js';
 import { callbackRoutes } from './routes/callbacks.js';
-import { handlePaymentBatch } from './queues/payment-executor.js';
-import { handleCallbackBatch } from './queues/callback-processor.js';
-import { handleReconciliationBatch } from './queues/reconciliation-worker.js';
-import { handleBackupBatch } from './queues/backup-worker.js';
 import { withConnection, uuidSet } from './db/client.js';
-export { OrganizationRateLimiter } from './rate-limiter.js';
-import { correlationId } from '@solvaren/core';
-import type {
-  AppContext,
-  Env,
-  PaymentQueueMessage,
-  CallbackQueueMessage,
-  ReconciliationQueueMessage,
-  BackupQueueMessage,
-} from './env.js';
+import type { AppContext, Env, ReconciliationQueueMessage, BackupQueueMessage } from './env.js';
 
 const app = new Hono<AppContext>();
 
@@ -86,7 +73,7 @@ app.get('/health', (c) => c.json({ status: 'ok' }));
 app.get('/health/ready', async (c) => {
   const started = Date.now();
   try {
-    await withConnection(c.env, c.executionCtx, async (sql) => {
+    await withConnection(c.env, async (sql) => {
       await sql`SELECT 1`;
     });
     return c.json({ status: 'ready', databaseLatencyMs: Date.now() - started });
@@ -111,97 +98,17 @@ app.route('/ai', aiRoutes);
 app.route('/integrations', callbackRoutes);
 
 // ---------------------------------------------------------------------------
-// Queue consumers
+// Scheduled work (spec 10, TRK-008, 13.4)
+//
+// These were the Worker's `scheduled` handler, dispatched by cron expression. They are now
+// plain exported functions that `scheduler.ts` calls on a timer, which makes them directly
+// callable from a test and from an operator script — a sweep that can only be triggered by
+// waiting for a cron is a sweep nobody can debug at 06:00.
 // ---------------------------------------------------------------------------
 
-type AnyQueueMessage =
-  PaymentQueueMessage | CallbackQueueMessage | ReconciliationQueueMessage | BackupQueueMessage;
-
-export default {
-  fetch: app.fetch,
-
-  /**
-   * Route a batch by its queue name.
-   *
-   * Each consumer acknowledges or retries per message rather than per batch: one poisoned
-   * message must not force thirty healthy payments to be redelivered, which would be
-   * thirty more opportunities for a double submission.
-   */
-  async queue(
-    batch: MessageBatch<AnyQueueMessage>,
-    env: Env,
-    ctx: ExecutionContext,
-  ): Promise<void> {
-    switch (batch.queue) {
-      case 'solvaren-payments':
-      case 'solvaren-payments-staging':
-        await handlePaymentBatch(batch as MessageBatch<PaymentQueueMessage>, env, ctx);
-        break;
-      case 'solvaren-callbacks':
-      case 'solvaren-callbacks-staging':
-        await handleCallbackBatch(batch as MessageBatch<CallbackQueueMessage>, env, ctx);
-        break;
-      case 'solvaren-reconciliation':
-      case 'solvaren-reconciliation-staging':
-        await handleReconciliationBatch(
-          batch as MessageBatch<ReconciliationQueueMessage>,
-          env,
-          ctx,
-        );
-        break;
-      case 'solvaren-backups':
-      case 'solvaren-backups-staging':
-        await handleBackupBatch(batch as MessageBatch<BackupQueueMessage>, env, ctx);
-        break;
-      default:
-        // An unrecognised queue is a deployment error. Acknowledge rather than loop, and
-        // make it loud in the logs.
-        console.error(
-          JSON.stringify({ level: 'error', message: 'Unknown queue', queue: batch.queue }),
-        );
-        for (const message of batch.messages) message.ack();
-    }
-  },
-
-  /**
-   * Scheduled work (spec 10, TRK-008, 13.4).
-   *
-   * Cron expressions are declared in wrangler.toml; this dispatches on which one fired.
-   */
-  async scheduled(event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
-    const correlation = correlationId();
-
-    switch (event.cron) {
-      // Every five minutes: sweep in-flight transactions for every organisation.
-      case '*/5 * * * *':
-        ctx.waitUntil(runReconciliationSweep(env, ctx, correlation));
-        break;
-
-      // Hourly: fire due backup schedules and record missed ones.
-      case '0 * * * *':
-        ctx.waitUntil(runBackupSchedules(env, ctx, correlation));
-        break;
-
-      // Daily at 02:00 UTC (05:00 East Africa Time): housekeeping.
-      case '0 2 * * *':
-        ctx.waitUntil(runHousekeeping(env, ctx, correlation));
-        break;
-
-      default:
-        console.warn(
-          JSON.stringify({ level: 'warn', message: 'Unhandled cron', cron: event.cron }),
-        );
-    }
-  },
-};
-
 /** Enqueue a reconciliation sweep per organisation with an enabled integration. */
-async function runReconciliationSweep(
-  env: Env,
-  ctx: ExecutionContext,
-  correlation: string,
-): Promise<void> {
-  await withConnection(env, ctx, async (sql) => {
+export async function runReconciliationSweep(env: Env, correlation: string): Promise<void> {
+  await withConnection(env, async (sql) => {
     const organizations = await sql<{ organization_id: string }[]>`
       SELECT DISTINCT t.organization_id
         FROM transactions t
@@ -217,7 +124,7 @@ async function runReconciliationSweep(
         organizationId: org.organization_id,
         correlationId: correlation,
       };
-      await env.RECONCILIATION_QUEUE.send(message);
+      await env.queue.send({ queue: 'reconciliation', body: message });
     }
 
     if (organizations.length > 0) {
@@ -241,12 +148,8 @@ async function runReconciliationSweep(
  * hours records a MISSED attempt before the next run is queued, so the gap is visible in
  * the history instead of being inferred from its absence.
  */
-async function runBackupSchedules(
-  env: Env,
-  ctx: ExecutionContext,
-  correlation: string,
-): Promise<void> {
-  await withConnection(env, ctx, async (sql) => {
+export async function runBackupSchedules(env: Env, correlation: string): Promise<void> {
+  await withConnection(env, async (sql) => {
     const due = await sql<
       {
         organization_id: string;
@@ -291,7 +194,7 @@ async function runBackupSchedules(
         trigger: 'SCHEDULED',
         correlationId: correlation,
       };
-      await env.BACKUP_QUEUE.send(message);
+      await env.queue.send({ queue: 'backups', body: message });
 
       // Next window: the cron string is stored for display, but the scheduler advances in
       // fixed daily steps, which is what the supported schedules (daily/weekly) need.
@@ -306,12 +209,8 @@ async function runBackupSchedules(
 }
 
 /** Daily housekeeping: expire stale ceremonies and sessions. Never touches ledger rows. */
-async function runHousekeeping(
-  env: Env,
-  ctx: ExecutionContext,
-  correlation: string,
-): Promise<void> {
-  await withConnection(env, ctx, async (sql) => {
+export async function runHousekeeping(env: Env, correlation: string): Promise<void> {
+  await withConnection(env, async (sql) => {
     // An authorization ceremony left open past its expiry blocks the partial unique index
     // and prevents a new one from being started.
     const abandoned = await sql<{ id: string }[]>`
@@ -349,3 +248,5 @@ async function runHousekeeping(
     );
   });
 }
+
+export { app };

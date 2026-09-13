@@ -7,9 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "preview": "vite preview",
-    "deploy:staging": "wrangler pages deploy dist --project-name solvaren-web-staging",
-    "deploy:production": "wrangler pages deploy dist --project-name solvaren-web"
+    "preview": "vite preview"
   },
   "dependencies": {
     "@solvaren/core": "workspace:*",

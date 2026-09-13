@@ -1,137 +1,165 @@
 /**
  * Integration test harness.
  *
- * Runs the real Hono application against a real PostgreSQL database, with the Cloudflare
- * bindings replaced by in-memory doubles. The point is that *nothing about the application
- * is stubbed*: the same middleware, the same route handlers, the same state machines, the
- * same SQL and the same triggers that run in production run here.
+ * Runs the real Hono application against a real PostgreSQL database. The point is that
+ * *nothing about the application is stubbed*: the same middleware, the same route handlers,
+ * the same state machines, the same SQL and the same triggers that run in production run
+ * here.
  *
- * What is faked, and why that is honest:
- *   - Queues become an in-memory list the test drains by calling the real consumer. The
- *     consumer code is the production code; only the delivery mechanism differs.
- *   - R2 becomes a Map. Object semantics we rely on (put, get, head, delete) are trivial.
- *   - Hyperdrive becomes a plain connection string, which is what it resolves to anyway.
- *   - The Daraja HTTP client is given a scripted `fetch`, so provider behaviour — including
- *     failures, timeouts and duplicate callbacks — is exercised deterministically.
+ * Since the move to Railway there is less to fake than there was, which is the main reason
+ * the port was worth doing carefully:
  *
- * This file is test infrastructure and is excluded from the Worker build.
+ *   - **The queue is real.** It is the same `job_queue` table, the same `FOR UPDATE SKIP
+ *     LOCKED` claim and the same settle logic that production runs. Previously this was an
+ *     in-memory list, so the tests proved the consumers worked but proved nothing about
+ *     delivery, retry, dead-lettering or the transactional enqueue. Now they do.
+ *   - **The rate limiter is real**, backed by the same table, with a switch to force the
+ *     throttled path.
+ *   - **Object storage is a Map.** The four operations we rely on (put, get, head, delete)
+ *     are trivial, and signing them against a live S3 would make the suite need network and
+ *     credentials. The SigV4 implementation is covered separately.
+ *   - **The Daraja HTTP client is given a scripted `fetch`**, so provider behaviour —
+ *     including failures, timeouts and duplicate callbacks — is exercised deterministically.
+ *
+ * This file is test infrastructure and is excluded from the production build.
  */
 
 import postgres from 'postgres';
-import type { Sql } from './db/client.js';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
+import type { Sql } from './db/client.js';
+import { PostgresJobQueue } from './queue/queue.js';
+import { drainQueuesOnce } from './queue/runner.js';
+import { PostgresRateLimiter } from './rate-limiter.js';
 import type {
   Env,
+  ObjectStore,
+  ObjectPutOptions,
+  ObjectBody,
+  ObjectMetadata,
+  RateLimiter,
+  QueueName,
   PaymentQueueMessage,
   CallbackQueueMessage,
   ReconciliationQueueMessage,
   BackupQueueMessage,
+  AnyQueueMessage,
 } from './env.js';
 
+/** A job as a test sees it: the payload plus the delivery bookkeeping around it. */
 export interface QueuedMessage<T> {
+  id: string;
   body: T;
   attempts: number;
-  acked: boolean;
-  retried: boolean;
-  retryDelaySeconds: number | null;
+  status: 'PENDING' | 'IN_FLIGHT' | 'SUCCEEDED' | 'DEAD_LETTERED';
+  lastError: string | null;
 }
 
-/** In-memory stand-in for a Cloudflare Queue. */
-export class FakeQueue<T> {
-  readonly name: string;
-  readonly messages: QueuedMessage<T>[] = [];
+/**
+ * Read-side view of one queue.
+ *
+ * Every method is async because the queue is a table now rather than an array. That is a
+ * real cost in test ergonomics and it buys something worth more: an assertion about what is
+ * queued is an assertion about what production would actually deliver.
+ */
+export class QueueInspector<T> {
+  constructor(
+    private readonly sql: Sql,
+    private readonly queue: QueueName,
+    private readonly producer: PostgresJobQueue,
+  ) {}
 
-  constructor(name: string) {
-    this.name = name;
-  }
-
+  /** Enqueue directly, for tests that exercise a consumer without the route that feeds it. */
   async send(body: T): Promise<void> {
-    this.messages.push({
-      body,
-      attempts: 0,
-      acked: false,
-      retried: false,
-      retryDelaySeconds: null,
-    });
+    await this.producer.send({ queue: this.queue, body } as never);
   }
 
-  async sendBatch(batch: { body: T }[]): Promise<void> {
-    for (const item of batch) await this.send(item.body);
+  /** Every job ever enqueued on this queue, oldest first. */
+  async all(): Promise<QueuedMessage<T>[]> {
+    const rows = await this.sql<
+      { id: string; body: T; attempts: number; status: string; last_error: string | null }[]
+    >`
+      SELECT id, body, attempts, status, last_error
+        FROM job_queue WHERE queue = ${this.queue}
+       ORDER BY created_at, id
+    `;
+    return rows.map((row) => ({
+      id: row.id,
+      body: row.body,
+      attempts: row.attempts,
+      status: row.status as QueuedMessage<T>['status'],
+      lastError: row.last_error,
+    }));
   }
 
-  /** Messages not yet acknowledged, in delivery order. */
-  pending(): QueuedMessage<T>[] {
-    return this.messages.filter((m) => !m.acked);
+  /** Jobs still awaiting delivery. */
+  async pending(): Promise<QueuedMessage<T>[]> {
+    return (await this.all()).filter((m) => m.status === 'PENDING' || m.status === 'IN_FLIGHT');
   }
 
-  /** Build the MessageBatch shape a consumer expects. */
-  toBatch(): {
-    queue: string;
-    messages: {
-      id: string;
-      timestamp: Date;
-      body: T;
-      attempts: number;
-      ack(): void;
-      retry(options?: { delaySeconds?: number }): void;
-    }[];
-    ackAll(): void;
-    retryAll(): void;
-  } {
-    const pending = this.pending();
+  /** Jobs that exhausted their attempts. */
+  async deadLettered(): Promise<QueuedMessage<T>[]> {
+    return (await this.all()).filter((m) => m.status === 'DEAD_LETTERED');
+  }
+
+  async count(): Promise<number> {
+    return (await this.all()).length;
+  }
+
+  /**
+   * Simulate an at-least-once redelivery of a job that already ran.
+   *
+   * The honest simulation is a second row with the same body: that is exactly what a broker
+   * redelivering a message looks like to a consumer, and it is what happens here when a
+   * worker dies after doing its work but before settling, and the lease expires.
+   *
+   * Note what this does NOT do — it does not reopen the original job. The
+   * `job_queue_guard_update` trigger forbids that, because a terminal job coming back to
+   * life would re-submit a payment that already settled. A test that reached for that would
+   * be testing something the database refuses to allow.
+   */
+  async redeliver(id: string): Promise<void> {
+    await this.sql`
+      INSERT INTO job_queue (queue, body, organization_id, correlation_id, max_attempts)
+      SELECT queue, body, organization_id, correlation_id, max_attempts
+        FROM job_queue WHERE id = ${id}
+    `;
+  }
+
+  /** Remove every job on this queue, so a test can assert on what a later action enqueues. */
+  async clear(): Promise<void> {
+    await this.sql`DELETE FROM job_queue WHERE queue = ${this.queue}`;
+  }
+}
+
+/**
+ * In-memory object store.
+ *
+ * Implements the same four-method `ObjectStore` interface the S3 client does, so the code
+ * under test cannot tell the difference.
+ */
+export class InMemoryObjectStore implements ObjectStore {
+  readonly objects = new Map<string, { body: Uint8Array; metadata: Record<string, string> }>();
+
+  async put(key: string, body: string | Uint8Array, options: ObjectPutOptions = {}): Promise<void> {
+    const bytes = typeof body === 'string' ? new TextEncoder().encode(body) : body;
+    this.objects.set(key, { body: bytes, metadata: options.metadata ?? {} });
+  }
+
+  async get(key: string): Promise<ObjectBody | null> {
+    const object = this.objects.get(key);
+    if (!object) return null;
     return {
-      queue: this.name,
-      messages: pending.map((message, index) => ({
-        id: `msg-${index}`,
-        timestamp: new Date(),
-        body: message.body,
-        attempts: message.attempts + 1,
-        ack: () => {
-          message.acked = true;
-        },
-        retry: (options?: { delaySeconds?: number }) => {
-          message.retried = true;
-          message.attempts += 1;
-          message.retryDelaySeconds = options?.delaySeconds ?? 0;
-        },
-      })),
-      ackAll: () => pending.forEach((m) => (m.acked = true)),
-      retryAll: () => pending.forEach((m) => (m.retried = true)),
+      size: object.body.byteLength,
+      text: async () => new TextDecoder().decode(object.body),
+      bytes: async () => object.body,
     };
   }
 
-  clear(): void {
-    this.messages.length = 0;
-  }
-}
-
-/** In-memory stand-in for an R2 bucket. */
-export class FakeR2 {
-  readonly objects = new Map<string, { body: string; metadata: Record<string, string> }>();
-
-  async put(
-    key: string,
-    value: string | ArrayBuffer,
-    options?: { customMetadata?: Record<string, string> },
-  ): Promise<{ key: string; size: number }> {
-    const body = typeof value === 'string' ? value : new TextDecoder().decode(value);
-    this.objects.set(key, { body, metadata: options?.customMetadata ?? {} });
-    return { key, size: body.length };
-  }
-
-  async get(key: string): Promise<{ text(): Promise<string> } | null> {
+  async head(key: string): Promise<ObjectMetadata | null> {
     const object = this.objects.get(key);
     if (!object) return null;
-    return { text: async () => object.body };
-  }
-
-  async head(
-    key: string,
-  ): Promise<{ size: number; customMetadata: Record<string, string> } | null> {
-    const object = this.objects.get(key);
-    if (!object) return null;
-    return { size: object.body.length, customMetadata: object.metadata };
+    return { size: object.body.byteLength, etag: null };
   }
 
   async delete(key: string): Promise<void> {
@@ -139,26 +167,29 @@ export class FakeR2 {
   }
 }
 
-/** Durable Object namespace double backing the rate limiter with an always-allow stub. */
-class FakeRateLimiterNamespace {
+/**
+ * The real Postgres rate limiter, with a switch.
+ *
+ * Delegates to the production implementation so the bucket arithmetic and row locking are
+ * genuinely exercised, but can be forced to refuse so the throttled path in the payment
+ * executor is reachable without submitting twenty payments to drain a bucket.
+ */
+export class ControllableRateLimiter implements RateLimiter {
   /** Set to false to exercise the throttled path. */
   allow = true;
 
-  idFromName(name: string) {
-    return { toString: () => name };
+  private readonly real: PostgresRateLimiter;
+
+  constructor(sql: Sql) {
+    this.real = new PostgresRateLimiter(sql);
   }
 
-  get(_id: unknown) {
-    const allow = () => this.allow;
-    return {
-      async fetch(): Promise<Response> {
-        return Response.json({
-          allowed: allow(),
-          remaining: allow() ? 19 : 0,
-          retryAfterMs: allow() ? 0 : 1000,
-        });
-      },
-    };
+  async acquire(
+    organizationId: string,
+    options?: { permits?: number; ratePerSecond?: number; burst?: number },
+  ): Promise<{ allowed: boolean; remaining: number; retryAfterMs: number }> {
+    if (!this.allow) return { allowed: false, remaining: 0, retryAfterMs: 1000 };
+    return this.real.acquire(organizationId, options);
   }
 }
 
@@ -166,15 +197,20 @@ export interface TestEnvironment {
   env: Env;
   sql: Sql;
   queues: {
-    payments: FakeQueue<PaymentQueueMessage>;
-    callbacks: FakeQueue<CallbackQueueMessage>;
-    reconciliation: FakeQueue<ReconciliationQueueMessage>;
-    backups: FakeQueue<BackupQueueMessage>;
+    payments: QueueInspector<PaymentQueueMessage>;
+    callbacks: QueueInspector<CallbackQueueMessage>;
+    reconciliation: QueueInspector<ReconciliationQueueMessage>;
+    backups: QueueInspector<BackupQueueMessage>;
   };
-  r2: FakeR2;
-  rateLimiter: FakeRateLimiterNamespace;
-  /** Execution context double; `waitUntil` is awaited so tests are deterministic. */
-  ctx: ExecutionContext;
+  storage: InMemoryObjectStore;
+  rateLimiter: ControllableRateLimiter;
+  /**
+   * Run pending jobs through their real consumers, once.
+   *
+   * Claims and settles exactly as the production runner does, so a test that drains is
+   * testing delivery as well as the consumer.
+   */
+  drain(queue?: QueueName): Promise<number>;
   close(): Promise<void>;
 }
 
@@ -215,7 +251,12 @@ export async function createTestEnvironment(
   await admin.end({ timeout: 5 });
 
   const databaseUrl = adminUrl.replace(/\/[^/]*$/, `/${databaseName}`);
-  const sql = postgres(databaseUrl, { max: 2, onnotice: () => {}, transform: { undefined: null } });
+  const sql = postgres(databaseUrl, {
+    max: 4,
+    onnotice: () => {},
+    transform: { undefined: null },
+    fetch_types: false,
+  }) as Sql;
 
   for (const file of readdirSync(MIGRATIONS_DIR)
     .filter((f) => f.endsWith('.sql'))
@@ -223,64 +264,44 @@ export async function createTestEnvironment(
     await sql.unsafe(readFileSync(join(MIGRATIONS_DIR, file), 'utf8'));
   }
 
-  const queues = {
-    payments: new FakeQueue<PaymentQueueMessage>('solvaren-payments'),
-    callbacks: new FakeQueue<CallbackQueueMessage>('solvaren-callbacks'),
-    reconciliation: new FakeQueue<ReconciliationQueueMessage>('solvaren-reconciliation'),
-    backups: new FakeQueue<BackupQueueMessage>('solvaren-backups'),
-  };
-  const r2 = new FakeR2();
-  const rateLimiter = new FakeRateLimiterNamespace();
+  const producer = new PostgresJobQueue(sql);
+  const storage = new InMemoryObjectStore();
+  const rateLimiter = new ControllableRateLimiter(sql);
 
-  // The fakes implement the slice of each Cloudflare binding that SOLVAREN actually calls,
-  // not the full interface — `Queue.metrics` and most of `R2Bucket` have no bearing on
-  // whether a payment is released twice. The widening happens here, in named bindings
-  // rather than inline, so each one is a single reviewable statement.
-  const paymentQueue = queues.payments as unknown as Queue<PaymentQueueMessage>;
-  const callbackQueue = queues.callbacks as unknown as Queue<CallbackQueueMessage>;
-  const reconciliationQueue = queues.reconciliation as unknown as Queue<ReconciliationQueueMessage>;
-  const backupQueue = queues.backups as unknown as Queue<BackupQueueMessage>;
-  const artifacts = r2 as unknown as R2Bucket;
-  const rateLimiterNamespace = rateLimiter as unknown as DurableObjectNamespace;
-
-  const env = {
-    HYPERDRIVE: { connectionString: databaseUrl } as Hyperdrive,
-    PAYMENT_QUEUE: paymentQueue,
-    CALLBACK_QUEUE: callbackQueue,
-    RECONCILIATION_QUEUE: reconciliationQueue,
-    BACKUP_QUEUE: backupQueue,
-    ARTIFACTS: artifacts,
-    RATE_LIMITER: rateLimiterNamespace,
+  const env: Env = {
+    sql,
+    queue: producer,
+    objects: storage,
+    rateLimiter,
     SESSION_SIGNING_KEY: 'test-session-signing-key-0123456789abcdef',
     SECRET_ENCRYPTION_KEY: 'test-secret-encryption-key-0123456789abcdef',
     CALLBACK_SHARED_SECRET: 'test-callback-shared-secret-0123456789',
-    ENVIRONMENT: 'development' as const,
+    ENVIRONMENT: 'development',
     APP_ORIGIN: 'https://app.solvaren.test',
     API_BASE_URL: 'https://api.solvaren.test',
     WEBAUTHN_RP_ID: 'solvaren.test',
     WEBAUTHN_RP_NAME: 'SOLVAREN Test',
-    DARAJA_ENVIRONMENT: 'sandbox' as const,
+    DARAJA_ENVIRONMENT: 'sandbox',
     // No AI key: the AI routes must degrade gracefully, which is itself under test.
-  } as Env;
+  };
 
-  const pending: Promise<unknown>[] = [];
-  const ctx = {
-    waitUntil: (promise: Promise<unknown>) => {
-      pending.push(promise.catch(() => {}));
-    },
-    passThroughOnException: () => {},
-    props: {},
-  } as unknown as ExecutionContext;
+  const queues = {
+    payments: new QueueInspector<PaymentQueueMessage>(sql, 'payments', producer),
+    callbacks: new QueueInspector<CallbackQueueMessage>(sql, 'callbacks', producer),
+    reconciliation: new QueueInspector<ReconciliationQueueMessage>(sql, 'reconciliation', producer),
+    backups: new QueueInspector<BackupQueueMessage>(sql, 'backups', producer),
+  };
 
   return {
     env,
     sql,
     queues,
-    r2,
+    storage,
     rateLimiter,
-    ctx,
+    async drain(queue?: QueueName) {
+      return drainQueuesOnce(env, queue);
+    },
     async close() {
-      await Promise.all(pending);
       await sql.end({ timeout: 5 });
       const cleanup = postgres(adminUrl, { max: 1, onnotice: () => {} });
       await cleanup.unsafe(`DROP DATABASE IF EXISTS ${databaseName} WITH (FORCE)`).catch(() => {});
@@ -289,16 +310,7 @@ export async function createTestEnvironment(
   };
 }
 
-/** Drain every pending message on a queue through its real consumer. */
-export async function drainQueue<T>(
-  queue: FakeQueue<T>,
-  consumer: (batch: never, env: Env, ctx: ExecutionContext) => Promise<void>,
-  env: Env,
-  ctx: ExecutionContext,
-): Promise<void> {
-  if (queue.pending().length === 0) return;
-  await consumer(queue.toBatch() as never, env, ctx);
-}
+export type { AnyQueueMessage };
 
 // ---------------------------------------------------------------------------
 // Scripted Daraja provider
