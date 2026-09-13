@@ -57,8 +57,10 @@ export class OrganizationRateLimiter implements DurableObject {
     const now = Date.now();
 
     if (!this.bucket) {
-      this.bucket =
-        (await this.state.storage.get<BucketState>('bucket')) ?? { tokens: burst, lastRefillMs: now };
+      this.bucket = (await this.state.storage.get<BucketState>('bucket')) ?? {
+        tokens: burst,
+        lastRefillMs: now,
+      };
     }
 
     // Refill by elapsed time, capped at the burst size.

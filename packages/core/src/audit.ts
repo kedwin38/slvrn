@@ -82,7 +82,11 @@ export function stableStringify(value: unknown): string {
   return 'null';
 }
 
-export function auditCanonicalForm(event: AuditEventInput, previousHash: string, sequence: number): string {
+export function auditCanonicalForm(
+  event: AuditEventInput,
+  previousHash: string,
+  sequence: number,
+): string {
   return [
     AUDIT_CHAIN_VERSION,
     String(sequence),
@@ -144,7 +148,9 @@ export async function verifyChain(
         eventsVerified: i,
       };
     }
-    const recomputed = await sha256Hex(auditCanonicalForm(event, event.previousHash, event.sequence));
+    const recomputed = await sha256Hex(
+      auditCanonicalForm(event, event.previousHash, event.sequence),
+    );
     if (recomputed !== event.eventHash) {
       return {
         valid: false,
@@ -156,7 +162,13 @@ export async function verifyChain(
     }
     previousHash = event.eventHash;
   }
-  return { valid: true, brokenAtIndex: null, brokenEventId: null, reason: null, eventsVerified: events.length };
+  return {
+    valid: true,
+    brokenAtIndex: null,
+    brokenEventId: null,
+    reason: null,
+    eventsVerified: events.length,
+  };
 }
 
 /**

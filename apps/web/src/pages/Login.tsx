@@ -13,7 +13,11 @@ import { useState } from 'react';
 import { api, ApiError, setSessionToken, type SessionResponse } from '../lib/api.js';
 import { Notice, Field } from '../components/primitives.js';
 
-export function Login({ onAuthenticated }: { onAuthenticated: (session: SessionResponse) => void }) {
+export function Login({
+  onAuthenticated,
+}: {
+  onAuthenticated: (session: SessionResponse) => void;
+}) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [stage, setStage] = useState<'credentials' | 'webauthn'>('credentials');
@@ -87,7 +91,13 @@ export function Login({ onAuthenticated }: { onAuthenticated: (session: SessionR
                   strokeLinecap="round"
                   strokeLinejoin="round"
                 />
-                <path d="M10 25 L22 25" stroke="var(--ink-inverse)" strokeWidth="2.4" strokeLinecap="round" opacity="0.55" />
+                <path
+                  d="M10 25 L22 25"
+                  stroke="var(--ink-inverse)"
+                  strokeWidth="2.4"
+                  strokeLinecap="round"
+                  opacity="0.55"
+                />
               </svg>
               <div>
                 <div className="brand-name">SOLVAREN</div>

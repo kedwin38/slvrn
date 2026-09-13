@@ -53,17 +53,28 @@ export class SolvarenError extends Error {
 
   toJSON() {
     return {
-      error: { code: this.code, category: this.category, message: this.message, details: this.details },
+      error: {
+        code: this.code,
+        category: this.category,
+        message: this.message,
+        details: this.details,
+      },
     };
   }
 }
 
 export const validationError = (code: string, message: string, details?: Record<string, unknown>) =>
   new SolvarenError('VALIDATION', code, message, details);
-export const authenticationError = (code: string, message: string, details?: Record<string, unknown>) =>
-  new SolvarenError('AUTHENTICATION', code, message, details);
-export const authorizationError = (code: string, message: string, details?: Record<string, unknown>) =>
-  new SolvarenError('AUTHORIZATION', code, message, details);
+export const authenticationError = (
+  code: string,
+  message: string,
+  details?: Record<string, unknown>,
+) => new SolvarenError('AUTHENTICATION', code, message, details);
+export const authorizationError = (
+  code: string,
+  message: string,
+  details?: Record<string, unknown>,
+) => new SolvarenError('AUTHORIZATION', code, message, details);
 export const stateError = (code: string, message: string, details?: Record<string, unknown>) =>
   new SolvarenError('STATE', code, message, details);
 export const policyError = (code: string, message: string, details?: Record<string, unknown>) =>

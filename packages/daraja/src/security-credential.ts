@@ -76,7 +76,10 @@ function readDer(buf: Uint8Array, offset: number): DerNode {
   } else {
     const byteCount = first & 0x7f;
     if (byteCount === 0 || byteCount > 4) {
-      throw validationError('DARAJA_CERT_INVALID', 'Malformed certificate: unsupported DER length encoding');
+      throw validationError(
+        'DARAJA_CERT_INVALID',
+        'Malformed certificate: unsupported DER length encoding',
+      );
     }
     length = 0;
     for (let k = 1; k <= byteCount; k++) length = length * 256 + buf[i + k]!;
@@ -85,7 +88,10 @@ function readDer(buf: Uint8Array, offset: number): DerNode {
   const start = i;
   const end = start + length;
   if (end > buf.length) {
-    throw validationError('DARAJA_CERT_INVALID', 'Malformed certificate: declared length exceeds the data');
+    throw validationError(
+      'DARAJA_CERT_INVALID',
+      'Malformed certificate: declared length exceeds the data',
+    );
   }
   return { tag, start, length, end, next: end };
 }
@@ -115,7 +121,10 @@ function bigIntToBytes(value: bigint, length: number): Uint8Array {
     v >>= 8n;
   }
   if (v !== 0n) {
-    throw providerError('DARAJA_CREDENTIAL_OVERFLOW', 'Encrypted value does not fit the RSA modulus');
+    throw providerError(
+      'DARAJA_CREDENTIAL_OVERFLOW',
+      'Encrypted value does not fit the RSA modulus',
+    );
   }
   return out;
 }
@@ -128,11 +137,17 @@ function parseRsaPublicKeyDer(buf: Uint8Array, offset: number): RsaPublicKey {
   }
   const modNode = readDer(buf, seq.start);
   if (modNode.tag !== TAG_INTEGER) {
-    throw validationError('DARAJA_CERT_INVALID', 'Expected an INTEGER modulus in the RSA public key');
+    throw validationError(
+      'DARAJA_CERT_INVALID',
+      'Expected an INTEGER modulus in the RSA public key',
+    );
   }
   const expNode = readDer(buf, modNode.next);
   if (expNode.tag !== TAG_INTEGER) {
-    throw validationError('DARAJA_CERT_INVALID', 'Expected an INTEGER exponent in the RSA public key');
+    throw validationError(
+      'DARAJA_CERT_INVALID',
+      'Expected an INTEGER exponent in the RSA public key',
+    );
   }
 
   // DER INTEGERs are signed, so a leading 0x00 is present when the high bit is set.
@@ -155,7 +170,10 @@ export function extractRsaPublicKey(pemOrDer: string | Uint8Array): RsaPublicKey
 
   const outer = readDer(der, 0);
   if (outer.tag !== TAG_SEQUENCE) {
-    throw validationError('DARAJA_CERT_INVALID', 'The certificate does not begin with a DER SEQUENCE');
+    throw validationError(
+      'DARAJA_CERT_INVALID',
+      'The certificate does not begin with a DER SEQUENCE',
+    );
   }
 
   // Case 1: bare RSAPublicKey — SEQUENCE { INTEGER, INTEGER }.
@@ -262,13 +280,22 @@ export function pkcs1v15Pad(message: Uint8Array, modulusBytes: number): Uint8Arr
  * encryptions of the same password differ — a useful property when proving that a rotation
  * actually took effect.
  */
-export function generateSecurityCredential(initiatorPassword: string, certificatePem: string): string {
+export function generateSecurityCredential(
+  initiatorPassword: string,
+  certificatePem: string,
+): string {
   if (!initiatorPassword || initiatorPassword.trim() === '') {
-    throw validationError('DARAJA_INITIATOR_PASSWORD_REQUIRED', 'The initiator password is required');
+    throw validationError(
+      'DARAJA_INITIATOR_PASSWORD_REQUIRED',
+      'The initiator password is required',
+    );
   }
   const key = extractRsaPublicKey(certificatePem);
   if (key.modulusBytes < 128) {
-    throw validationError('DARAJA_CERT_WEAK', 'The certificate key is smaller than 1024 bits and will not be used');
+    throw validationError(
+      'DARAJA_CERT_WEAK',
+      'The certificate key is smaller than 1024 bits and will not be used',
+    );
   }
   const message = new TextEncoder().encode(initiatorPassword);
   const padded = pkcs1v15Pad(message, key.modulusBytes);
@@ -296,7 +323,9 @@ export function validateInitiatorPassword(password: string): { ok: boolean; prob
   if (password.length < 8) problems.push('The password must be at least 8 characters');
   if (password.length > 30) problems.push('The password must be at most 30 characters');
   if (/[@.]/.test(password)) {
-    problems.push('M-PESA portal passwords must not contain "@" or "." — Safaricom treats them inconsistently');
+    problems.push(
+      'M-PESA portal passwords must not contain "@" or "." — Safaricom treats them inconsistently',
+    );
   }
   const disallowed = password.match(/[^A-Za-z0-9#&%$]/g);
   if (disallowed) {

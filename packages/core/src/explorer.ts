@@ -118,7 +118,10 @@ export interface PageInfo {
   hasPrevious: boolean;
 }
 
-export function pageInfo(query: Pick<ExplorerQuery, 'page' | 'pageSize'>, totalRows: number): PageInfo {
+export function pageInfo(
+  query: Pick<ExplorerQuery, 'page' | 'pageSize'>,
+  totalRows: number,
+): PageInfo {
   const totalPages = Math.max(1, Math.ceil(totalRows / query.pageSize));
   return {
     page: query.page,

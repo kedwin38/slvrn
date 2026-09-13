@@ -26,7 +26,9 @@ export function BackupsPage() {
       setData(await api.backups.overview());
       setError(null);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'The backup configuration could not be loaded.');
+      setError(
+        err instanceof ApiError ? err.message : 'The backup configuration could not be loaded.',
+      );
     } finally {
       setLoading(false);
     }
@@ -51,8 +53,8 @@ export function BackupsPage() {
     }
   }
 
-  const configuration = data?.configuration as Record<string, unknown> | null;
-  const latest = data?.latestResult as Record<string, unknown> | null;
+  const configuration = data?.configuration ?? null;
+  const latest = data?.latestResult ?? null;
   const latestFailed = latest?.status === 'FAILED' || latest?.status === 'MISSED';
 
   return (
@@ -101,14 +103,13 @@ export function BackupsPage() {
           {latest && (
             <Notice
               tone={latest.status === 'SUCCESS' ? 'success' : latestFailed ? 'danger' : 'info'}
-              title={`Last backup: ${String(latest.status)}`}
+              title={`Last backup: ${latest.status}`}
             >
               <div>
-                {String(latest.attemptReference)} ·{' '}
-                <RelativeTime value={String(latest.startedAt)} />
-                {latest.sizeBytes ? ` · ${formatBytes(Number(latest.sizeBytes))}` : ''}
+                {latest.attemptReference} · <RelativeTime value={latest.startedAt} />
+                {latest.sizeBytes ? ` · ${formatBytes(latest.sizeBytes)}` : ''}
               </div>
-              {latest.errorMessage ? <div className="small">{String(latest.errorMessage)}</div> : null}
+              {latest.errorMessage ? <div className="small">{latest.errorMessage}</div> : null}
               {latest.status === 'SUCCESS' && latest.retentionComplete === false && (
                 <div className="small">
                   Retention did not complete: some older objects could not be removed. The retained
@@ -121,34 +122,44 @@ export function BackupsPage() {
           <div className="card">
             <div className="card-header">
               <span className="card-title">Target</span>
-              <span className="chip" data-tone={configuration.status === 'CONNECTED' ? 'success' : 'warning'}>
-                {String(configuration.status)}
+              <span
+                className="chip"
+                data-tone={configuration.status === 'CONNECTED' ? 'success' : 'warning'}
+              >
+                {configuration.status}
               </span>
             </div>
             <div className="card-body">
               <dl className="grid" style={{ gap: 'var(--s4)' }}>
-                <Detail label="Provider" value={String(configuration.providerLabel)} />
-                <Detail label="Bucket" value={String(configuration.bucket)} />
-                <Detail label="Prefix" value={String(configuration.pathPrefix)} />
+                <Detail label="Provider" value={configuration.providerLabel} />
+                <Detail label="Bucket" value={configuration.bucket} />
+                <Detail label="Prefix" value={configuration.pathPrefix ?? '—'} />
                 {/* Masked, always. BAK-002: the plaintext is unreachable from any response. */}
-                <Detail label="Access key" value={String(configuration.accessKeyMasked)} mono />
-                <Detail label="Secret key" value={String(configuration.secretKeyMasked)} mono />
-                <Detail label="Encryption" value={String(configuration.encryptionMode)} />
+                <Detail label="Access key" value={configuration.accessKeyMasked} mono />
+                <Detail label="Secret key" value={configuration.secretKeyMasked} mono />
+                <Detail label="Encryption" value={configuration.encryptionMode} />
                 <Detail
                   label="Schedule"
                   value={
                     configuration.scheduleEnabled
-                      ? `${String(configuration.scheduleCron)} (${String(configuration.scheduleTimezone)})`
+                      ? `${configuration.scheduleCron ?? '—'} (${configuration.scheduleTimezone ?? 'UTC'})`
                       : 'Disabled'
                   }
                 />
-                <Detail label="Retention" value={`${String(configuration.retentionMaxCount)} backups`} />
+                <Detail
+                  label="Retention"
+                  value={
+                    configuration.retentionMaxCount === null
+                      ? 'Unlimited'
+                      : `${configuration.retentionMaxCount} backups`
+                  }
+                />
               </dl>
 
               {configuration.suspended === true && (
-                <Notice tone="danger" >
-                  Backups are suspended: {String(configuration.suspensionReason)}. Correct the target
-                  configuration to resume.
+                <Notice tone="danger">
+                  Backups are suspended: {configuration.suspensionReason ?? 'reason not recorded'}.
+                  Correct the target configuration to resume.
                 </Notice>
               )}
             </div>
@@ -157,7 +168,9 @@ export function BackupsPage() {
           <div className="card">
             <div className="card-header">
               <span className="card-title">Attempt history</span>
-              <span className="small muted">Every attempt, including failures and missed windows</span>
+              <span className="small muted">
+                Every attempt, including failures and missed windows
+              </span>
             </div>
             {data && data.history.length === 0 ? (
               <EmptyState title="No backups have run yet" />

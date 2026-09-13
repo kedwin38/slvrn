@@ -33,16 +33,38 @@ interface NavEntry {
 
 const NAVIGATION: NavEntry[] = [
   { route: 'dashboard', label: 'Dashboard', icon: '◫', group: 'Operations' },
-  { route: 'batches', label: 'Payment batches', icon: '▤', requires: 'batch:read', group: 'Operations' },
-  { route: 'transactions', label: 'Transactions', icon: '⇄', requires: 'transactions:read', group: 'Operations' },
-  { route: 'backups', label: 'Backups', icon: '⛃', requires: 'admin:backups', group: 'Administration' },
+  {
+    route: 'batches',
+    label: 'Payment batches',
+    icon: '▤',
+    requires: 'batch:read',
+    group: 'Operations',
+  },
+  {
+    route: 'transactions',
+    label: 'Transactions',
+    icon: '⇄',
+    requires: 'transactions:read',
+    group: 'Operations',
+  },
+  {
+    route: 'backups',
+    label: 'Backups',
+    icon: '⛃',
+    requires: 'admin:backups',
+    group: 'Administration',
+  },
 ];
 
 export function App() {
   const [session, setSession] = useState<SessionResponse | null>(null);
   const [route, setRoute] = useState<Route>(readRoute());
-  const [explorerFilter, setExplorerFilter] = useState<{ statuses?: TxnState[]; batchId?: string }>({});
-  const [banner, setBanner] = useState<{ tone: 'success' | 'danger'; message: string } | null>(null);
+  const [explorerFilter, setExplorerFilter] = useState<{ statuses?: TxnState[]; batchId?: string }>(
+    {},
+  );
+  const [banner, setBanner] = useState<{ tone: 'success' | 'danger'; message: string } | null>(
+    null,
+  );
 
   useEffect(() => {
     const onHashChange = () => setRoute(readRoute());
@@ -81,7 +103,9 @@ export function App() {
   }
 
   const { user, capabilities } = session;
-  const visible = NAVIGATION.filter((entry) => !entry.requires || capabilities[entry.requires as never]);
+  const visible = NAVIGATION.filter(
+    (entry) => !entry.requires || capabilities[entry.requires as never],
+  );
   const groups = ['Operations', 'Administration'] as const;
 
   return (
@@ -208,7 +232,13 @@ function BrandMark() {
         strokeLinecap="round"
         strokeLinejoin="round"
       />
-      <path d="M10 25 L22 25" stroke="var(--ink-inverse)" strokeWidth="2.4" strokeLinecap="round" opacity="0.55" />
+      <path
+        d="M10 25 L22 25"
+        stroke="var(--ink-inverse)"
+        strokeWidth="2.4"
+        strokeLinecap="round"
+        opacity="0.55"
+      />
     </svg>
   );
 }

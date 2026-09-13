@@ -53,12 +53,12 @@ you have an answer.
 Once you know the truth, record it. **SOLVAREN never rewrites a settled transaction**, so
 the resolution is recorded on the reconciliation case, not by editing the ledger.
 
-| What M-PESA says | What to do |
-|---|---|
-| Completed, with a receipt | Resolve the case as `RESOLVED_SUCCESS` and enter the receipt number. The transaction settles to SUCCESS. |
-| Cancelled, declined or expired | Resolve as `RESOLVED_FAILED`. The transaction settles to FAILED with the provider's reason. |
-| No record of the request | Resolve as `RESOLVED_FAILED` with a note. The instruction can then be reissued as a **new** instruction in a **new** batch — never by retrying the old one. |
-| Still processing | Leave the case open. The sweep will continue. |
+| What M-PESA says               | What to do                                                                                                                                                  |
+| ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Completed, with a receipt      | Resolve the case as `RESOLVED_SUCCESS` and enter the receipt number. The transaction settles to SUCCESS.                                                    |
+| Cancelled, declined or expired | Resolve as `RESOLVED_FAILED`. The transaction settles to FAILED with the provider's reason.                                                                 |
+| No record of the request       | Resolve as `RESOLVED_FAILED` with a note. The instruction can then be reissued as a **new** instruction in a **new** batch — never by retrying the old one. |
+| Still processing               | Leave the case open. The sweep will continue.                                                                                                               |
 
 ---
 

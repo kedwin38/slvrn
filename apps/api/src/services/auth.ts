@@ -79,7 +79,10 @@ export interface PasswordStageResult {
  * Distinguishing them would tell an attacker which emails are real and which officers have
  * been offboarded.
  */
-export async function verifyPasswordStage(sql: Sql, input: LoginInput): Promise<PasswordStageResult> {
+export async function verifyPasswordStage(
+  sql: Sql,
+  input: LoginInput,
+): Promise<PasswordStageResult> {
   const rows = await sql<UserRow[]>`
     SELECT u.id, u.organization_id, o.slug AS organization_slug, u.email, u.full_name,
            u.authority_level, u.status, u.password_hash, u.authorization_pin_hash,
@@ -93,7 +96,10 @@ export async function verifyPasswordStage(sql: Sql, input: LoginInput): Promise<
 
   const user = rows[0];
   const invalid = () =>
-    authenticationError('INVALID_CREDENTIALS', 'That email address and password combination was not recognised');
+    authenticationError(
+      'INVALID_CREDENTIALS',
+      'That email address and password combination was not recognised',
+    );
 
   if (!user) {
     // Equalise timing against the real path before failing.
@@ -240,10 +246,16 @@ export async function resolveSession(
 
   const row = rows[0];
   if (!row) {
-    throw authenticationError('SESSION_INVALID', 'Your session is not valid. Please sign in again.');
+    throw authenticationError(
+      'SESSION_INVALID',
+      'Your session is not valid. Please sign in again.',
+    );
   }
   if (row.revoked_at) {
-    throw authenticationError('SESSION_REVOKED', 'This session has been signed out. Please sign in again.');
+    throw authenticationError(
+      'SESSION_REVOKED',
+      'This session has been signed out. Please sign in again.',
+    );
   }
   if (new Date(row.expires_at).getTime() <= Date.now()) {
     throw authenticationError('SESSION_EXPIRED', 'Your session has expired. Please sign in again.');
@@ -272,7 +284,9 @@ export async function resolveSession(
     fullName: row.full_name,
     sessionId: row.session_id,
     authenticatedAt: new Date(row.authenticated_at).getTime(),
-    webauthnVerifiedAt: row.webauthn_verified_at ? new Date(row.webauthn_verified_at).getTime() : null,
+    webauthnVerifiedAt: row.webauthn_verified_at
+      ? new Date(row.webauthn_verified_at).getTime()
+      : null,
     trustedDeviceId: row.trusted_device_id,
   };
 }
@@ -293,7 +307,10 @@ export function assertFreshAuthentication(
     throw authenticationError(
       'STEP_UP_REQUIRED',
       'This action requires you to confirm your identity again.',
-      { authenticatedSecondsAgo: Math.floor(age / 1000), maxAgeSeconds: Math.floor(maxAgeMs / 1000) },
+      {
+        authenticatedSecondsAgo: Math.floor(age / 1000),
+        maxAgeSeconds: Math.floor(maxAgeMs / 1000),
+      },
     );
   }
 }

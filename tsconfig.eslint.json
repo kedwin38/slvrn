@@ -1,0 +1,33 @@
+{
+  // A project that exists only so type-aware linting can see every file.
+  //
+  // The package tsconfigs deliberately exclude test files so they are never emitted into
+  // `dist`. That is correct for building and wrong for linting: the rules worth having
+  // (`no-floating-promises` above all) need type information, and a test that drops an
+  // await on a database write is exactly the bug that makes a suite pass while proving
+  // nothing. This project includes everything and emits nothing.
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": false,
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
+    "types": ["node"],
+    "allowJs": true,
+    "paths": {
+      "@solvaren/core": ["./packages/core/src/index.ts"],
+      "@solvaren/daraja": ["./packages/daraja/src/index.ts"]
+    }
+  },
+  "include": [
+    "packages/**/*.ts",
+    "packages/**/*.tsx",
+    "apps/**/*.ts",
+    "apps/**/*.tsx",
+    "*.ts",
+    "*.js"
+  ],
+  "exclude": ["**/node_modules/**", "**/dist/**", "**/.wrangler/**", "**/coverage/**"]
+}

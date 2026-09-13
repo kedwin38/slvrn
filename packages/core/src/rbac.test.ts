@@ -166,7 +166,11 @@ describe('failed-transaction export policy (§28)', () => {
   });
 
   it('refuses a disabled L1 account even when the policy permits the level', () => {
-    expect(canExportFailedTransactions(actor('L1', { status: 'DISABLED' }), { allowL1FailedExport: true })).toBe(false);
+    expect(
+      canExportFailedTransactions(actor('L1', { status: 'DISABLED' }), {
+        allowL1FailedExport: true,
+      }),
+    ).toBe(false);
   });
 });
 

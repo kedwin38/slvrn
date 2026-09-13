@@ -37,9 +37,7 @@ dashboardRoutes.get('/operational', requirePermissions('analytics:basic'), async
   const actor = actorOf(c);
 
   const data = await withConnection(c.env, c.executionCtx, async (sql) => {
-    const batches = await sql<
-      { state: string; count: string }[]
-    >`
+    const batches = await sql<{ state: string; count: string }[]>`
       SELECT state, COUNT(*) AS count
         FROM payment_batches
        WHERE organization_id = ${actor.organizationId}
@@ -131,7 +129,13 @@ dashboardRoutes.get('/financial', requirePermissions('analytics:advanced'), asyn
 
   const data = await withConnection(c.env, c.executionCtx, async (sql) => {
     const departments = await sql<
-      { department_name: string | null; period_month: string; paid_cents: string; paid_count: string; failed_count: string }[]
+      {
+        department_name: string | null;
+        period_month: string;
+        paid_cents: string;
+        paid_count: string;
+        failed_count: string;
+      }[]
     >`
       SELECT department_name, period_month::text, paid_cents, paid_count, failed_count
         FROM department_expenditure
@@ -153,9 +157,7 @@ dashboardRoutes.get('/financial', requirePermissions('analytics:advanced'), asyn
        GROUP BY 1 ORDER BY 1 DESC
     `;
 
-    const anomalies = await sql<
-      { severity: string; count: string }[]
-    >`
+    const anomalies = await sql<{ severity: string; count: string }[]>`
       SELECT severity, COUNT(*) AS count
         FROM risk_findings
        WHERE organization_id = ${actor.organizationId} AND disposition = 'OPEN'
@@ -189,8 +191,12 @@ dashboardRoutes.get('/financial', requirePermissions('analytics:advanced'), asyn
         totalCents: Number(cycle.total_cents),
         recipientCount: Number(cycle.recipient_count),
       })),
-      openFindingsBySeverity: Object.fromEntries(anomalies.map((a) => [a.severity, Number(a.count)])),
-      reconciliationByState: Object.fromEntries(reconciliation.map((r) => [r.state, Number(r.count)])),
+      openFindingsBySeverity: Object.fromEntries(
+        anomalies.map((a) => [a.severity, Number(a.count)]),
+      ),
+      reconciliationByState: Object.fromEntries(
+        reconciliation.map((r) => [r.state, Number(r.count)]),
+      ),
       forecast: {
         nextCycleCents: forecastCents,
         basis: 'Mean of the last three settled payment cycles',
@@ -304,7 +310,8 @@ dashboardRoutes.post(
     return c.json(
       {
         accepted: true,
-        message: 'A balance query has been sent to M-PESA. The panel updates when the result arrives.',
+        message:
+          'A balance query has been sent to M-PESA. The panel updates when the result arrives.',
       },
       202,
     );
@@ -370,17 +377,17 @@ dashboardRoutes.get(
 );
 
 /** GET /analytics/executive/briefing — the L3 organisation-wide intelligence view. */
-dashboardRoutes.get(
-  '/executive/briefing',
-  requirePermissions('analytics:executive'),
-  async (c) => {
-    const actor = actorOf(c);
-    if (actor.level !== 'L3') {
-      throw authorizationError('LEVEL_RESTRICTED', 'Executive intelligence is available to Level 3 only');
-    }
+dashboardRoutes.get('/executive/briefing', requirePermissions('analytics:executive'), async (c) => {
+  const actor = actorOf(c);
+  if (actor.level !== 'L3') {
+    throw authorizationError(
+      'LEVEL_RESTRICTED',
+      'Executive intelligence is available to Level 3 only',
+    );
+  }
 
-    const data = await withConnection(c.env, c.executionCtx, async (sql) => {
-      const months = await sql<{ period: string; total_cents: string; count: string }[]>`
+  const data = await withConnection(c.env, c.executionCtx, async (sql) => {
+    const months = await sql<{ period: string; total_cents: string; count: string }[]>`
         SELECT date_trunc('month', t.completed_at AT TIME ZONE 'Africa/Nairobi')::DATE::text AS period,
                SUM(pi.amount_cents) AS total_cents, COUNT(*) AS count
           FROM transactions t
@@ -390,7 +397,7 @@ dashboardRoutes.get(
          GROUP BY 1 ORDER BY 1 DESC
       `;
 
-      const topDepartment = await sql<{ department_name: string | null; delta_cents: string }[]>`
+    const topDepartment = await sql<{ department_name: string | null; delta_cents: string }[]>`
         WITH current_month AS (
           SELECT d.name, COALESCE(SUM(pi.amount_cents), 0) AS total
             FROM transactions t
@@ -417,7 +424,7 @@ dashboardRoutes.get(
          LIMIT 1
       `;
 
-      const findings = await sql<{ open: string; reviewed: string }[]>`
+    const findings = await sql<{ open: string; reviewed: string }[]>`
         SELECT COUNT(*) FILTER (WHERE disposition = 'OPEN')     AS open,
                COUNT(*) FILTER (WHERE disposition <> 'OPEN')    AS reviewed
           FROM risk_findings
@@ -425,40 +432,39 @@ dashboardRoutes.get(
            AND created_at > now() - interval '30 days'
       `;
 
-      const unresolved = await sql<{ count: string }[]>`
+    const unresolved = await sql<{ count: string }[]>`
         SELECT COUNT(*) AS count FROM reconciliation_cases
          WHERE organization_id = ${actor.organizationId} AND state IN ('OPEN', 'QUERYING', 'ESCALATED')
       `;
 
-      const thisMonth = months[0] ? Number(months[0].total_cents) : 0;
-      const lastMonth = months[1] ? Number(months[1].total_cents) : 0;
-      const changePercent = lastMonth > 0 ? ((thisMonth - lastMonth) / lastMonth) * 100 : null;
+    const thisMonth = months[0] ? Number(months[0].total_cents) : 0;
+    const lastMonth = months[1] ? Number(months[1].total_cents) : 0;
+    const changePercent = lastMonth > 0 ? ((thisMonth - lastMonth) / lastMonth) * 100 : null;
 
-      return {
-        monthlyDisbursement: months.map((m) => ({
-          period: m.period,
-          totalCents: Number(m.total_cents),
-          transactionCount: Number(m.count),
-        })),
-        monthOverMonth: {
-          currentCents: thisMonth,
-          previousCents: lastMonth,
-          changePercent: changePercent === null ? null : Number(changePercent.toFixed(1)),
-          largestMover: topDepartment[0]
-            ? {
-                departmentName: topDepartment[0].department_name ?? 'Unassigned',
-                deltaCents: Number(topDepartment[0].delta_cents),
-              }
-            : null,
-        },
-        risk: {
-          openFindings: Number(findings[0]?.open ?? 0),
-          reviewedFindings: Number(findings[0]?.reviewed ?? 0),
-        },
-        unresolvedReconciliationCases: Number(unresolved[0]?.count ?? 0),
-      };
-    });
+    return {
+      monthlyDisbursement: months.map((m) => ({
+        period: m.period,
+        totalCents: Number(m.total_cents),
+        transactionCount: Number(m.count),
+      })),
+      monthOverMonth: {
+        currentCents: thisMonth,
+        previousCents: lastMonth,
+        changePercent: changePercent === null ? null : Number(changePercent.toFixed(1)),
+        largestMover: topDepartment[0]
+          ? {
+              departmentName: topDepartment[0].department_name ?? 'Unassigned',
+              deltaCents: Number(topDepartment[0].delta_cents),
+            }
+          : null,
+      },
+      risk: {
+        openFindings: Number(findings[0]?.open ?? 0),
+        reviewedFindings: Number(findings[0]?.reviewed ?? 0),
+      },
+      unresolvedReconciliationCases: Number(unresolved[0]?.count ?? 0),
+    };
+  });
 
-    return c.json(data);
-  },
-);
+  return c.json(data);
+});

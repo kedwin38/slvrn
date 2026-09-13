@@ -73,7 +73,10 @@ describe('RSAES-PKCS1-v1_5 encryption', () => {
     // …but both decrypt to the same plaintext.
     for (const c of [a, b]) {
       expect(
-        privateDecrypt({ key: privateKeyPem, padding: constants.RSA_PKCS1_PADDING }, Buffer.from(c, 'base64')).toString(),
+        privateDecrypt(
+          { key: privateKeyPem, padding: constants.RSA_PKCS1_PADDING },
+          Buffer.from(c, 'base64'),
+        ).toString(),
       ).toBe('testpass');
     }
   });
@@ -143,7 +146,9 @@ describe('certificate parsing', () => {
 
   it('rejects junk rather than producing an unusable credential', () => {
     expect(() => extractRsaPublicKey('not a certificate at all !!!')).toThrow(/not valid PEM/);
-    expect(() => extractRsaPublicKey('-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----')).toThrow();
+    expect(() =>
+      extractRsaPublicKey('-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----'),
+    ).toThrow();
   });
 
   it('rejects an empty initiator password', () => {
@@ -165,7 +170,9 @@ describe('operator guardrails', () => {
   it('enforces the M-PESA portal password character rules before go-live', () => {
     expect(validateInitiatorPassword('Valid#Pass1').ok).toBe(true);
     expect(validateInitiatorPassword('has@at.com').problems.join(' ')).toMatch(/must not contain/);
-    expect(validateInitiatorPassword('paren(s)here').problems.join(' ')).toMatch(/only the special characters/);
+    expect(validateInitiatorPassword('paren(s)here').problems.join(' ')).toMatch(
+      /only the special characters/,
+    );
     expect(validateInitiatorPassword('short').problems.join(' ')).toMatch(/at least 8/);
   });
 });
@@ -203,13 +210,19 @@ function makeSelfSignedCertificate(privatePem: string, publicPem: string): strin
   // Name ::= SEQUENCE OF RDN; one CN=solvaren-test
   const cn = der(
     0x31,
-    der(0x30, Buffer.concat([Buffer.from('0603550403', 'hex'), der(0x0c, Buffer.from('solvaren-test'))])),
+    der(
+      0x30,
+      Buffer.concat([Buffer.from('0603550403', 'hex'), der(0x0c, Buffer.from('solvaren-test'))]),
+    ),
   );
   const name = der(0x30, cn);
 
   const validity = der(
     0x30,
-    Buffer.concat([der(0x17, Buffer.from('260913000000Z')), der(0x17, Buffer.from('360913000000Z'))]),
+    Buffer.concat([
+      der(0x17, Buffer.from('260913000000Z')),
+      der(0x17, Buffer.from('360913000000Z')),
+    ]),
   );
 
   const tbs = der(
@@ -226,7 +239,10 @@ function makeSelfSignedCertificate(privatePem: string, publicPem: string): strin
   );
 
   const signature = createSign('sha256').update(tbs).sign(createPrivateKey(privatePem));
-  const cert = der(0x30, Buffer.concat([tbs, algId, der(0x03, Buffer.concat([Buffer.from([0x00]), signature]))]));
+  const cert = der(
+    0x30,
+    Buffer.concat([tbs, algId, der(0x03, Buffer.concat([Buffer.from([0x00]), signature]))]),
+  );
 
   const pem = `-----BEGIN CERTIFICATE-----\n${cert
     .toString('base64')

@@ -201,7 +201,12 @@ export function Stat({
 
   if (onClick) {
     return (
-      <button className="stat" data-tone={tone} onClick={onClick} style={{ textAlign: 'left', cursor: 'pointer' }}>
+      <button
+        className="stat"
+        data-tone={tone}
+        onClick={onClick}
+        style={{ textAlign: 'left', cursor: 'pointer' }}
+      >
         {content}
       </button>
     );
@@ -298,7 +303,13 @@ export function Modal({
         if (dismissible && event.target === event.currentTarget) onClose();
       }}
     >
-      <div className="ceremony" role="dialog" aria-modal="true" aria-labelledby={labelledBy} ref={container}>
+      <div
+        className="ceremony"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={labelledBy}
+        ref={container}
+      >
         {children}
       </div>
     </div>
@@ -356,7 +367,11 @@ export function Field({
   label: string;
   hint?: string;
   error?: string | null;
-  children: (props: { id: string; 'aria-describedby': string | undefined; 'aria-invalid': boolean }) => ReactNode;
+  children: (props: {
+    id: string;
+    'aria-describedby': string | undefined;
+    'aria-invalid': boolean;
+  }) => ReactNode;
 }) {
   const id = useId();
   const hintId = hint ? `${id}-hint` : undefined;

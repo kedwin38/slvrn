@@ -105,7 +105,11 @@ export function maskConfig(row: DarajaConfigRow): MaskedDarajaConfig {
  * encrypted *before* it leaves the Worker, so the platform never holds a usable credential
  * even in the store.
  */
-export function secretReference(organizationId: string, environment: string, field: string): string {
+export function secretReference(
+  organizationId: string,
+  environment: string,
+  field: string,
+): string {
   return `daraja:${organizationId}:${environment}:${field}`;
 }
 
@@ -191,9 +195,13 @@ export async function configureDaraja(
     }
     const passwordCheck = validateInitiatorPassword(input.initiatorPasswordOrCredential);
     if (!passwordCheck.ok) {
-      throw validationError('DARAJA_INITIATOR_PASSWORD_INVALID', passwordCheck.problems.join('; '), {
-        problems: passwordCheck.problems,
-      });
+      throw validationError(
+        'DARAJA_INITIATOR_PASSWORD_INVALID',
+        passwordCheck.problems.join('; '),
+        {
+          problems: passwordCheck.problems,
+        },
+      );
     }
     securityCredential = generateSecurityCredential(
       input.initiatorPasswordOrCredential,
@@ -204,7 +212,11 @@ export async function configureDaraja(
   const refs = {
     consumerKey: secretReference(input.organizationId, input.environment, 'consumer_key'),
     consumerSecret: secretReference(input.organizationId, input.environment, 'consumer_secret'),
-    securityCredential: secretReference(input.organizationId, input.environment, 'security_credential'),
+    securityCredential: secretReference(
+      input.organizationId,
+      input.environment,
+      'security_credential',
+    ),
     callbackSecret: secretReference(input.organizationId, input.environment, 'callback_secret'),
   };
 
@@ -212,8 +224,14 @@ export async function configureDaraja(
 
   await Promise.all([
     store.put(refs.consumerKey, await encryptSecret(input.consumerKey, env.SECRET_ENCRYPTION_KEY)),
-    store.put(refs.consumerSecret, await encryptSecret(input.consumerSecret, env.SECRET_ENCRYPTION_KEY)),
-    store.put(refs.securityCredential, await encryptSecret(securityCredential, env.SECRET_ENCRYPTION_KEY)),
+    store.put(
+      refs.consumerSecret,
+      await encryptSecret(input.consumerSecret, env.SECRET_ENCRYPTION_KEY),
+    ),
+    store.put(
+      refs.securityCredential,
+      await encryptSecret(securityCredential, env.SECRET_ENCRYPTION_KEY),
+    ),
     store.put(refs.callbackSecret, await encryptSecret(callbackSecret, env.SECRET_ENCRYPTION_KEY)),
   ]);
 
@@ -261,7 +279,12 @@ export async function loadDarajaClient(
 ): Promise<{
   client: DarajaClient;
   credentials: DarajaCredentials;
-  config: { commandId: B2cCommandId; resultUrl: string; queueTimeoutUrl: string; environment: DarajaEnvironment };
+  config: {
+    commandId: B2cCommandId;
+    resultUrl: string;
+    queueTimeoutUrl: string;
+    environment: DarajaEnvironment;
+  };
 }> {
   const rows = await sql<DarajaConfigRow[]>`
     SELECT * FROM daraja_configurations
@@ -292,7 +315,8 @@ export async function loadDarajaClientById(
      LIMIT 1
   `;
   const config = rows[0];
-  if (!config) throw notFoundError('DARAJA_CONFIG_NOT_FOUND', 'That Daraja configuration could not be found');
+  if (!config)
+    throw notFoundError('DARAJA_CONFIG_NOT_FOUND', 'That Daraja configuration could not be found');
   return buildClient(env, config);
 }
 

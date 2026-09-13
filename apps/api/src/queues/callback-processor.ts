@@ -72,7 +72,13 @@ export async function processCallback(
   switch (callback.callback_type) {
     case 'B2C_RESULT':
     case 'B2C_TIMEOUT':
-      await applyB2cResult(sql, env, message, callback.raw_payload, callback.callback_type === 'B2C_TIMEOUT');
+      await applyB2cResult(
+        sql,
+        env,
+        message,
+        callback.raw_payload,
+        callback.callback_type === 'B2C_TIMEOUT',
+      );
       break;
     case 'TRANSACTION_STATUS':
       await applyTransactionStatus(sql, env, message, callback.raw_payload);
@@ -378,7 +384,11 @@ async function applyTransactionStatus(
            SET state = 'QUERYING', query_attempts = query_attempts + 1,
                next_query_at = now() + (interval '5 minutes' * GREATEST(1, query_attempts)),
                evidence = evidence || ${tx.json([
-                 { at: new Date().toISOString(), status: parsed.transactionStatus, resultCode: parsed.resultCode },
+                 {
+                   at: new Date().toISOString(),
+                   status: parsed.transactionStatus,
+                   resultCode: parsed.resultCode,
+                 },
                ] as never)}
          WHERE transaction_id = ${transaction.id} AND state IN ('OPEN', 'QUERYING')
       `;
@@ -395,7 +405,8 @@ async function applyTransactionStatus(
       outcome === 'FAILED'
         ? resolveFailure(
             parsed.resultCode !== '0' ? parsed.resultCode : 'SLV_NO_CALLBACK',
-            parsed.resultDescription || `M-PESA reports the transaction as ${parsed.transactionStatus}`,
+            parsed.resultDescription ||
+              `M-PESA reports the transaction as ${parsed.transactionStatus}`,
             overrides,
           )
         : null;

@@ -12,12 +12,22 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { api, ApiError, type BatchSummary } from '../lib/api.js';
-import { Amount, BatchStateChip, Notice, EmptyState, TableSkeleton, RelativeTime } from '../components/primitives.js';
+import {
+  Amount,
+  BatchStateChip,
+  Notice,
+  EmptyState,
+  TableSkeleton,
+} from '../components/primitives.js';
 import { AuthorizationCeremony } from './AuthorizationCeremony.js';
 
 interface Props {
   capabilities: Record<string, boolean>;
-  onReleased: (summary: { batchReference: string; instructionsQueued: number; message: string }) => void;
+  onReleased: (summary: {
+    batchReference: string;
+    instructionsQueued: number;
+    message: string;
+  }) => void;
   onViewTransactions: (batchId: string) => void;
 }
 
@@ -143,7 +153,8 @@ export function BatchesPage({ capabilities, onReleased, onViewTransactions }: Pr
                     <td>
                       {/* The roll-up of §6.1 — "182 SUCCESS / 3 FAILED / 1 TIMEOUT" — with
                           the failure count as a link to the filtered explorer. */}
-                      {batch.outcomes.success + batch.outcomes.failed + batch.outcomes.timeout === 0 ? (
+                      {batch.outcomes.success + batch.outcomes.failed + batch.outcomes.timeout ===
+                      0 ? (
                         <span className="muted small">Not yet executed</span>
                       ) : (
                         <div className="row small" style={{ gap: 'var(--s2)' }}>
@@ -193,7 +204,10 @@ export function BatchesPage({ capabilities, onReleased, onViewTransactions }: Pr
                         </button>
                       )}
                       {batch.state === 'AUTHORIZATION_PENDING' && canAuthorize && (
-                        <button className="button button-sm" onClick={() => setCeremonyBatchId(batch.batchId)}>
+                        <button
+                          className="button button-sm"
+                          onClick={() => setCeremonyBatchId(batch.batchId)}
+                        >
                           Resume authorization
                         </button>
                       )}

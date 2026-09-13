@@ -27,7 +27,8 @@ export const requestContext: MiddlewareHandler<AppContext> = async (c, next) => 
   // Honour an inbound correlation id only if it looks like ours; otherwise a caller could
   // poison the audit trail by supplying arbitrary text.
   const inbound = c.req.header('X-Correlation-Id');
-  const correlationId = inbound && /^cor_[A-Z0-9]{20}$/.test(inbound) ? inbound : newCorrelationId();
+  const correlationId =
+    inbound && /^cor_[A-Z0-9]{20}$/.test(inbound) ? inbound : newCorrelationId();
 
   c.set('correlationId', correlationId);
   c.set('securityContext', {
@@ -170,7 +171,16 @@ export function requireExactLevel(level: 'L1' | 'L2' | 'L3'): MiddlewareHandler<
  * or a secret. Second, error details are redacted on the way out, so a `SolvarenError`
  * carrying request context in `details` cannot leak credential material.
  */
-export function errorHandler(err: Error, c: { get: (k: 'correlationId') => string; json: Function }) {
+export function errorHandler(
+  err: Error,
+  c: {
+    get: (k: 'correlationId') => string;
+    // Typed rather than `Function`: the bare function type accepts any callable, so a
+    // handler wired to the wrong context object would compile and fail at runtime — on
+    // the error path, which is the worst place to discover it.
+    json: (body: unknown, status?: number) => Response;
+  },
+) {
   const correlationId = c.get('correlationId');
 
   if (err instanceof SolvarenError) {
@@ -191,7 +201,8 @@ export function errorHandler(err: Error, c: { get: (k: 'correlationId') => strin
   // Zod validation failures arrive as ZodError; surface the field paths but not the values,
   // since a rejected payload can contain a password or a PIN.
   if (err.name === 'ZodError') {
-    const issues = (err as unknown as { issues: { path: (string | number)[]; message: string }[] }).issues;
+    const issues = (err as unknown as { issues: { path: (string | number)[]; message: string }[] })
+      .issues;
     return c.json(
       {
         error: {

@@ -17,7 +17,12 @@ import {
   SORT_COLUMNS,
   MAX_PAGE_SIZE,
 } from './explorer.js';
-import { assessBatchRisk, DEFAULT_RISK_POLICY, type RecipientHistory, type InstructionForRisk } from './risk.js';
+import {
+  assessBatchRisk,
+  DEFAULT_RISK_POLICY,
+  type RecipientHistory,
+  type InstructionForRisk,
+} from './risk.js';
 
 const row = (o: Partial<TransactionExportRow> = {}): TransactionExportRow => ({
   batchReference: 'SLV-2026-00981',
@@ -56,7 +61,13 @@ describe('failed-transactions CSV export (§6.4, AC-18)', () => {
     const csv = renderFailedTransactionsCsv([row()], metadata);
     const headerLine = csv.split('\r\n').find((l) => l.startsWith('BatchReference'));
     expect(headerLine).toBe(FAILED_EXPORT_HEADERS.join(','));
-    for (const required of ['FailureCode', 'FailureReason', 'MPESAReceiptNo', 'ConversationID', 'OriginatorConversationID']) {
+    for (const required of [
+      'FailureCode',
+      'FailureReason',
+      'MPESAReceiptNo',
+      'ConversationID',
+      'OriginatorConversationID',
+    ]) {
       expect(headerLine).toContain(required);
     }
   });
@@ -84,7 +95,7 @@ describe('failed-transactions CSV export (§6.4, AC-18)', () => {
 
   it('neutralises CSV formula injection in every text field', () => {
     const hostile = row({
-      recipientName: '=cmd|\'/c calc\'!A1',
+      recipientName: "=cmd|'/c calc'!A1",
       failureReason: '+HYPERLINK("http://evil","click")',
       providerResultDescription: '@SUM(1+1)*cmd',
       departmentName: '-2+3+cmd',
@@ -123,9 +134,9 @@ describe('failed-transactions CSV export (§6.4, AC-18)', () => {
   });
 
   it('builds a safe, deterministic filename', () => {
-    expect(exportFilename('failed-transactions', 'Acme Holdings Ltd.', '2026-09-13T09:15:00.000Z')).toBe(
-      'failed-transactions_acme-holdings-ltd_2026-09-13_09-15-00-000.csv',
-    );
+    expect(
+      exportFilename('failed-transactions', 'Acme Holdings Ltd.', '2026-09-13T09:15:00.000Z'),
+    ).toBe('failed-transactions_acme-holdings-ltd_2026-09-13_09-15-00-000.csv');
   });
 });
 
@@ -228,7 +239,10 @@ describe('risk assessment (§11)', () => {
   });
 
   it('flags an identical duplicate instruction as high or critical', () => {
-    const dup = [ins('12345001', 'rcp-1', 45_000_00), { ...ins('12345002', 'rcp-1', 45_000_00), msisdn: '254712345001' }];
+    const dup = [
+      ins('12345001', 'rcp-1', 45_000_00),
+      { ...ins('12345002', 'rcp-1', 45_000_00), msisdn: '254712345001' },
+    ];
     dup[0]!.msisdn = '254712345001';
     const result = assessBatchRisk(baseInput({ instructions: dup }));
     const signal = result.signals.find((s) => s.type === 'DUPLICATE_INSTRUCTION');
@@ -239,8 +253,10 @@ describe('risk assessment (§11)', () => {
     expect(signal!.summary).not.toContain('254712345001');
   });
 
-  it('flags an amount far outside the recipient\'s history, with the evidence', () => {
-    const result = assessBatchRisk(baseInput({ instructions: [ins('12345001', 'rcp-1', 450_000_00)] }));
+  it("flags an amount far outside the recipient's history, with the evidence", () => {
+    const result = assessBatchRisk(
+      baseInput({ instructions: [ins('12345001', 'rcp-1', 450_000_00)] }),
+    );
     const signal = result.signals.find((s) => s.type === 'AMOUNT_DEVIATION')!;
     expect(signal.summary).toMatch(/10\.0× higher/);
     expect(signal.evidence.historicalMean).toBe('45,000.00');
@@ -250,7 +266,16 @@ describe('risk assessment (§11)', () => {
     const result = assessBatchRisk(
       baseInput({
         instructions: [ins('12345009', 'rcp-new', 300_000_00)],
-        history: new Map([['rcp-new', history({ recipientId: 'rcp-new', paymentCount: 0, recipientCreatedAt: now - 3_600_000 })]]),
+        history: new Map([
+          [
+            'rcp-new',
+            history({
+              recipientId: 'rcp-new',
+              paymentCount: 0,
+              recipientCreatedAt: now - 3_600_000,
+            }),
+          ],
+        ]),
       }),
     );
     const signal = result.signals.find((s) => s.type === 'NEW_RECIPIENT')!;
@@ -259,18 +284,24 @@ describe('risk assessment (§11)', () => {
 
   it('flags a recipient whose bank details changed hours ago — the account-swap attack', () => {
     const result = assessBatchRisk(
-      baseInput({ history: new Map([['rcp-1', history({ recipientLastModifiedAt: now - 2 * 3_600_000 })]]) }),
+      baseInput({
+        history: new Map([['rcp-1', history({ recipientLastModifiedAt: now - 2 * 3_600_000 })]]),
+      }),
     );
     expect(result.signals.some((s) => s.type === 'RECENTLY_MODIFIED_RECIPIENT')).toBe(true);
   });
 
   it('flags a batch total far from the recent baseline', () => {
-    const result = assessBatchRisk(baseInput({ instructions: [ins('12345001', 'rcp-1', 200_000_00)] }));
+    const result = assessBatchRisk(
+      baseInput({ instructions: [ins('12345001', 'rcp-1', 200_000_00)] }),
+    );
     expect(result.signals.some((s) => s.type === 'BATCH_TOTAL_DEVIATION')).toBe(true);
   });
 
   it('flags an edit made minutes before submission', () => {
-    const result = assessBatchRisk(baseInput({ lastMaterialEditAt: now - 120_000, submittedAt: now }));
+    const result = assessBatchRisk(
+      baseInput({ lastMaterialEditAt: now - 120_000, submittedAt: now }),
+    );
     expect(result.signals.some((s) => s.type === 'LATE_EDIT')).toBe(true);
   });
 
@@ -281,8 +312,12 @@ describe('risk assessment (§11)', () => {
   });
 
   it('applies diminishing returns so a large onboarding batch is not automatically critical', () => {
-    const many = Array.from({ length: 50 }, (_, i) => ins(`1234${String(i).padStart(4, '0')}`, `rcp-${i}`, 10_000_00));
-    const result = assessBatchRisk(baseInput({ instructions: many, history: new Map(), priorBatchTotalsCents: [] }));
+    const many = Array.from({ length: 50 }, (_, i) =>
+      ins(`1234${String(i).padStart(4, '0')}`, `rcp-${i}`, 10_000_00),
+    );
+    const result = assessBatchRisk(
+      baseInput({ instructions: many, history: new Map(), priorBatchTotalsCents: [] }),
+    );
     expect(result.score).toBeLessThanOrEqual(100);
     expect(result.signals.length).toBe(50);
   });

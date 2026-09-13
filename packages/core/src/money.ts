@@ -26,7 +26,11 @@ const AMOUNT_PATTERN = /^-?\d{1,15}(\.\d{1,2})?$/;
  */
 export function parseAmountToCents(input: string | number): number {
   const raw = typeof input === 'number' ? String(input) : input;
-  const cleaned = raw.trim().replace(/^KES\s*/i, '').replace(/,/g, '').replace(/\s/g, '');
+  const cleaned = raw
+    .trim()
+    .replace(/^KES\s*/i, '')
+    .replace(/,/g, '')
+    .replace(/\s/g, '');
   if (cleaned === '' || !AMOUNT_PATTERN.test(cleaned)) {
     throw validationError('AMOUNT_INVALID', `Amount "${raw}" is not a valid KES amount`);
   }
@@ -43,7 +47,9 @@ export function parseAmountToCents(input: string | number): number {
 export function formatCents(cents: number): string {
   const negative = cents < 0;
   const abs = Math.abs(cents);
-  const whole = Math.floor(abs / 100).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  const whole = Math.floor(abs / 100)
+    .toString()
+    .replace(/\B(?=(\d{3})+(?!\d))/g, ',');
   const frac = (abs % 100).toString().padStart(2, '0');
   return `${negative ? '-' : ''}${whole}.${frac}`;
 }
@@ -53,7 +59,10 @@ export function sumCents(values: readonly number[]): number {
   let total = 0;
   for (const v of values) {
     if (!Number.isSafeInteger(v)) {
-      throw validationError('AMOUNT_INVALID', 'Encountered a non-integer cent value while totalling');
+      throw validationError(
+        'AMOUNT_INVALID',
+        'Encountered a non-integer cent value while totalling',
+      );
     }
     total += v;
     if (!Number.isSafeInteger(total)) {

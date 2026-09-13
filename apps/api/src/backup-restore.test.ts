@@ -19,7 +19,7 @@ import { createTestEnvironment, type TestEnvironment } from './test-harness.js';
 import { runBackup, enforceRetention } from './queues/backup-worker.js';
 import { verifyChain, GENESIS_HASH, type AuditEvent } from '@solvaren/core';
 import { writeAuditEvent } from './db/audit-writer.js';
-import { inTransaction } from './db/client.js';
+import { inTransaction, type Sql } from './db/client.js';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -117,7 +117,13 @@ suite('backup and restore', () => {
     });
 
     const attempts = await harness.sql<
-      { status: string; object_key: string; size_bytes: string; checksum: string; ended_at: string }[]
+      {
+        status: string;
+        object_key: string;
+        size_bytes: string;
+        checksum: string;
+        ended_at: string;
+      }[]
     >`
       SELECT status, object_key, size_bytes, checksum, ended_at
         FROM backup_attempts WHERE organization_id = ${ORG} ORDER BY started_at DESC LIMIT 1
@@ -169,7 +175,9 @@ suite('backup and restore', () => {
     try {
       // Apply the schema exactly as the deployment guide does.
       const migrationsDir = join(process.cwd(), 'db', 'migrations');
-      for (const file of readdirSync(migrationsDir).filter((f) => f.endsWith('.sql')).sort()) {
+      for (const file of readdirSync(migrationsDir)
+        .filter((f) => f.endsWith('.sql'))
+        .sort()) {
         await restored.unsafe(readFileSync(join(migrationsDir, file), 'utf8'));
       }
 
@@ -189,28 +197,26 @@ suite('backup and restore', () => {
       expect(events.length).toBeGreaterThanOrEqual(5);
 
       const verification = await verifyChain(
-        events.map(
-          (r): AuditEvent => ({
-            eventId: r.event_reference as string,
-            organizationId: ORG,
-            actorId: r.actor_id as string,
-            actorLevel: r.actor_level as string | null,
-            eventClass: r.event_class as AuditEvent['eventClass'],
-            action: r.action as string,
-            objectType: r.object_type as string,
-            objectId: r.object_id as string | null,
-            outcome: r.outcome as AuditEvent['outcome'],
-            occurredAt: new Date(r.occurred_at as string).toISOString(),
-            previousState: r.previous_state,
-            newState: r.new_state,
-            securityContext: r.security_context as Record<string, unknown>,
-            detail: r.detail as Record<string, unknown>,
-            correlationId: r.correlation_id as string,
-            previousHash: r.previous_hash as string,
-            eventHash: r.event_hash as string,
-            sequence: Number(r.sequence),
-          }),
-        ),
+        events.map((r): AuditEvent => ({
+          eventId: r.event_reference as string,
+          organizationId: ORG,
+          actorId: r.actor_id as string,
+          actorLevel: r.actor_level as string | null,
+          eventClass: r.event_class as AuditEvent['eventClass'],
+          action: r.action as string,
+          objectType: r.object_type as string,
+          objectId: r.object_id as string | null,
+          outcome: r.outcome as AuditEvent['outcome'],
+          occurredAt: new Date(r.occurred_at as string).toISOString(),
+          previousState: r.previous_state,
+          newState: r.new_state,
+          securityContext: r.security_context as Record<string, unknown>,
+          detail: r.detail as Record<string, unknown>,
+          correlationId: r.correlation_id as string,
+          previousHash: r.previous_hash as string,
+          eventHash: r.event_hash as string,
+          sequence: Number(r.sequence),
+        })),
         GENESIS_HASH,
       );
       if (!verification.valid) {
@@ -223,10 +229,15 @@ suite('backup and restore', () => {
         `;
         for (const [index, before] of source.entries()) {
           const after = target[index];
-          if (!after) { console.log(`  MISSING event ${index}`); continue; }
+          if (!after) {
+            console.log(`  MISSING event ${index}`);
+            continue;
+          }
           for (const key of Object.keys(before)) {
-            const a = before[key] instanceof Date ? (before[key] as Date).toISOString() : JSON.stringify(before[key]);
-            const b = after[key] instanceof Date ? (after[key] as Date).toISOString() : JSON.stringify(after[key]);
+            const a =
+              before[key] instanceof Date ? before[key].toISOString() : JSON.stringify(before[key]);
+            const b =
+              after[key] instanceof Date ? after[key].toISOString() : JSON.stringify(after[key]);
             if (a !== b) console.log(`  seq ${index + 1} DIFFERS ${key}: ${a} -> ${b}`);
           }
         }
@@ -263,7 +274,9 @@ suite('backup and restore', () => {
 
       // 5. Restored users exist but cannot sign in: the sentinel is not a valid Argon2
       //    encoding, and the account is marked for re-enrolment.
-      const restoredUsers = await restored<{ password_hash: string; status: string; authority_level: string }[]>`
+      const restoredUsers = await restored<
+        { password_hash: string; status: string; authority_level: string }[]
+      >`
         SELECT password_hash, status, authority_level FROM users WHERE organization_id = ${ORG}
       `;
       expect(restoredUsers).toHaveLength(1);
@@ -374,16 +387,38 @@ suite('backup and restore', () => {
  *     is NOT NULL. The loader supplies a sentinel no password can match and marks the
  *     account for re-enrolment.
  */
-async function loadSnapshot(sql: postgres.Sql<{}>, snapshot: { data: Record<string, unknown[]> }) {
+async function loadSnapshot(sql: Sql, snapshot: { data: Record<string, unknown[]> }) {
   const order = [
-    'organizations', 'policies', 'users', 'webauthn_credentials', 'trusted_devices',
-    'recovery_codes', 'conflict_registrations', 'departments', 'recipients',
-    'payment_batches', 'payment_instructions', 'approvals', 'batch_editors',
-    'authorization_challenges', 'idempotency_claims', 'transactions', 'provider_callbacks',
-    'reconciliation_cases', 'risk_findings', 'account_balance_snapshots', 'audit_events',
-    'daraja_configurations', 'failure_reason_map', 'backup_configurations',
-    'backup_attempts', 'export_records', 'batch_templates', 'payment_calendar',
-    'ai_interactions', 'security_events',
+    'organizations',
+    'policies',
+    'users',
+    'webauthn_credentials',
+    'trusted_devices',
+    'recovery_codes',
+    'conflict_registrations',
+    'departments',
+    'recipients',
+    'payment_batches',
+    'payment_instructions',
+    'approvals',
+    'batch_editors',
+    'authorization_challenges',
+    'idempotency_claims',
+    'transactions',
+    'provider_callbacks',
+    'reconciliation_cases',
+    'risk_findings',
+    'account_balance_snapshots',
+    'audit_events',
+    'daraja_configurations',
+    'failure_reason_map',
+    'backup_configurations',
+    'backup_attempts',
+    'export_records',
+    'batch_templates',
+    'payment_calendar',
+    'ai_interactions',
+    'security_events',
   ];
 
   const triggers: [string, string][] = [

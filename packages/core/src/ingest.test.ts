@@ -34,7 +34,13 @@ describe('CSV grid tokenizer', () => {
 
 describe('column mapping', () => {
   it('matches header aliases case- and separator-insensitively', () => {
-    const mapping = mapColumns(['Employee Name', 'Mobile Number', 'Amount KES', 'Cost Centre', 'Staff ID']);
+    const mapping = mapColumns([
+      'Employee Name',
+      'Mobile Number',
+      'Amount KES',
+      'Cost Centre',
+      'Staff ID',
+    ]);
     expect(mapping.recipientName).toBe(0);
     expect(mapping.msisdn).toBe(1);
     expect(mapping.amount).toBe(2);
@@ -48,7 +54,8 @@ describe('payment CSV validation (§5.2, §22)', () => {
 
   it('parses a clean file', () => {
     const result = parsePaymentCsv(
-      header + 'Jane Doe,0712345678,45000,Engineering,EMP-001\nJohn Smith,254733111222,32000,Finance,EMP-002\n',
+      header +
+        'Jane Doe,0712345678,45000,Engineering,EMP-001\nJohn Smith,254733111222,32000,Finance,EMP-002\n',
     );
     expect(result.errors).toEqual([]);
     expect(result.rows).toHaveLength(2);
@@ -84,7 +91,7 @@ describe('payment CSV validation (§5.2, §22)', () => {
     expect(result.errors[0]!.reason).toMatch(/exceeds the M-PESA per-transaction maximum/);
   });
 
-  it('rejects fractional shillings rather than rounding someone\'s salary', () => {
+  it("rejects fractional shillings rather than rounding someone's salary", () => {
     const result = parsePaymentCsv(header + 'Jane,0712345678,45000.50,Eng,E1\n');
     expect(result.errors[0]!.reason).toMatch(/whole shillings only/);
   });
@@ -116,12 +123,17 @@ describe('payment CSV validation (§5.2, §22)', () => {
   });
 
   it('enforces the row limit', () => {
-    const rows = Array.from({ length: 12 }, (_, i) => `P${i},0712345${String(i).padStart(3, '0')},1000,Eng,E${i}`).join('\n');
+    const rows = Array.from(
+      { length: 12 },
+      (_, i) => `P${i},0712345${String(i).padStart(3, '0')},1000,Eng,E${i}`,
+    ).join('\n');
     expect(() => parsePaymentCsv(header + rows + '\n', { maxRows: 10 })).toThrow(/limit is 10/);
   });
 
   it('skips entirely blank interior rows without reporting an error', () => {
-    const result = parsePaymentCsv(header + 'Jane,0712345678,45000,Eng,E1\n,,,,\nJohn,0733111222,30000,Fin,E2\n');
+    const result = parsePaymentCsv(
+      header + 'Jane,0712345678,45000,Eng,E1\n,,,,\nJohn,0733111222,30000,Fin,E2\n',
+    );
     expect(result.rows).toHaveLength(2);
     expect(result.errors).toEqual([]);
   });

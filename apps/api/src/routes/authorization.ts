@@ -19,7 +19,12 @@ import {
   isValidIdempotencyKey,
   validationError,
 } from '@solvaren/core';
-import { requireAuth, requirePermissions, requireExactLevel, actorOf } from '../middleware/security.js';
+import {
+  requireAuth,
+  requirePermissions,
+  requireExactLevel,
+  actorOf,
+} from '../middleware/security.js';
 import { withConnection, inTransaction } from '../db/client.js';
 import { writeAuditEvent } from '../db/audit-writer.js';
 import {
@@ -55,7 +60,7 @@ authorizationRoutes.post(
         actor,
         batchId,
         correlationId: c.get('correlationId'),
-        securityContext: c.get('securityContext') as unknown as Record<string, unknown>,
+        securityContext: c.get('securityContext'),
       }),
     );
 
@@ -90,194 +95,207 @@ const releaseSchema = z.object({
  * every other check and refuses if `webauthnVerified` is not true, so no route can release
  * a payment by skipping this step.
  */
-authorizationRoutes.post('/batches/:id/release', requirePermissions('payment:release'), async (c) => {
-  const actor = actorOf(c);
-  const batchId = c.req.param('id');
-  const body = releaseSchema.parse(await c.req.json());
-  const correlationId = c.get('correlationId');
+authorizationRoutes.post(
+  '/batches/:id/release',
+  requirePermissions('payment:release'),
+  async (c) => {
+    const actor = actorOf(c);
+    const batchId = c.req.param('id');
+    const body = releaseSchema.parse(await c.req.json());
+    const correlationId = c.get('correlationId');
 
-  // An idempotency key on the release endpoint means a double-clicked button or a retried
-  // request cannot open a second release attempt.
-  const idempotencyKey = c.req.header('Idempotency-Key');
-  if (!isValidIdempotencyKey(idempotencyKey)) {
-    throw validationError(
-      'IDEMPOTENCY_KEY_REQUIRED',
-      'Payment release requires an Idempotency-Key header of 16 to 255 characters',
-    );
-  }
+    // An idempotency key on the release endpoint means a double-clicked button or a retried
+    // request cannot open a second release attempt.
+    const idempotencyKey = c.req.header('Idempotency-Key');
+    if (!isValidIdempotencyKey(idempotencyKey)) {
+      throw validationError(
+        'IDEMPOTENCY_KEY_REQUIRED',
+        'Payment release requires an Idempotency-Key header of 16 to 255 characters',
+      );
+    }
 
-  const outcome = await withConnection(c.env, c.executionCtx, async (sql) => {
-    // ---- Verify the WebAuthn assertion over the ceremony challenge --------
-    const challenges = await sql<
-      { webauthn_challenge: string; authorizer_user_id: string; consumed_at: string | null }[]
-    >`
+    const outcome = await withConnection(c.env, c.executionCtx, async (sql) => {
+      // ---- Verify the WebAuthn assertion over the ceremony challenge --------
+      const challenges = await sql<
+        { webauthn_challenge: string; authorizer_user_id: string; consumed_at: string | null }[]
+      >`
       SELECT webauthn_challenge, authorizer_user_id, consumed_at
         FROM authorization_challenges
        WHERE id = ${body.challengeId} AND organization_id = ${actor.organizationId}
        LIMIT 1
     `;
-    const challenge = challenges[0];
-    if (!challenge) {
-      throw notFoundError('CHALLENGE_NOT_FOUND', 'That authorization ceremony could not be found');
-    }
-    if (challenge.authorizer_user_id !== actor.userId) {
-      throw authenticationError(
-        'CHALLENGE_ACTOR_MISMATCH',
-        'This authorization ceremony was opened by a different user',
-      );
-    }
+      const challenge = challenges[0];
+      if (!challenge) {
+        throw notFoundError(
+          'CHALLENGE_NOT_FOUND',
+          'That authorization ceremony could not be found',
+        );
+      }
+      if (challenge.authorizer_user_id !== actor.userId) {
+        throw authenticationError(
+          'CHALLENGE_ACTOR_MISMATCH',
+          'This authorization ceremony was opened by a different user',
+        );
+      }
 
-    const response = body.webauthnResponse as Record<string, unknown> & { id?: string };
-    const credentialId = typeof response.id === 'string' ? response.id : '';
+      const response = body.webauthnResponse as Record<string, unknown> & { id?: string };
+      const credentialId = typeof response.id === 'string' ? response.id : '';
 
-    const credentials = await sql<
-      { id: string; credential_id: string; public_key: Uint8Array; signature_counter: string; transports: string[] }[]
-    >`
+      const credentials = await sql<
+        {
+          id: string;
+          credential_id: string;
+          public_key: Uint8Array;
+          signature_counter: string;
+          transports: string[];
+        }[]
+      >`
       SELECT id, credential_id, public_key, signature_counter, transports
         FROM webauthn_credentials
        WHERE user_id = ${actor.userId} AND credential_id = ${credentialId} AND status = 'ACTIVE'
        LIMIT 1
     `;
-    const credential = credentials[0];
-    if (!credential) {
-      throw authenticationError(
-        'WEBAUTHN_CREDENTIAL_UNKNOWN',
-        'That authenticator is not registered for payment authorization on this account',
-      );
-    }
+      const credential = credentials[0];
+      if (!credential) {
+        throw authenticationError(
+          'WEBAUTHN_CREDENTIAL_UNKNOWN',
+          'That authenticator is not registered for payment authorization on this account',
+        );
+      }
 
-    let verified = false;
-    try {
-      const verification = await verifyAuthenticationResponse({
-        response: body.webauthnResponse as never,
-        // The challenge is the manifest-bound digest issued by /begin, so the signature
-        // is cryptographically tied to this exact payment set (spec 7.5).
-        expectedChallenge: challenge.webauthn_challenge,
-        expectedOrigin: c.env.APP_ORIGIN,
-        expectedRPID: c.env.WEBAUTHN_RP_ID,
-        requireUserVerification: true,
-        credential: {
-          id: credential.credential_id,
-          publicKey: new Uint8Array(credential.public_key),
-          counter: Number(credential.signature_counter),
-          transports: credential.transports as never,
-        },
-      });
-      verified = verification.verified;
-      if (verified) {
-        await sql`
+      let verified = false;
+      try {
+        const verification = await verifyAuthenticationResponse({
+          response: body.webauthnResponse as never,
+          // The challenge is the manifest-bound digest issued by /begin, so the signature
+          // is cryptographically tied to this exact payment set (spec 7.5).
+          expectedChallenge: challenge.webauthn_challenge,
+          expectedOrigin: c.env.APP_ORIGIN,
+          expectedRPID: c.env.WEBAUTHN_RP_ID,
+          requireUserVerification: true,
+          credential: {
+            id: credential.credential_id,
+            publicKey: new Uint8Array(credential.public_key),
+            counter: Number(credential.signature_counter),
+            transports: credential.transports as never,
+          },
+        });
+        verified = verification.verified;
+        if (verified) {
+          await sql`
           UPDATE webauthn_credentials
              SET signature_counter = ${verification.authenticationInfo.newCounter}, last_used_at = now()
            WHERE id = ${credential.id}
         `;
+        }
+      } catch {
+        verified = false;
       }
-    } catch {
-      verified = false;
-    }
 
-    if (!verified) {
-      await inTransaction(sql, (tx) =>
-        writeAuditEvent(tx, {
-          organizationId: actor.organizationId,
-          actorId: actor.userId,
-          actorLevel: actor.level,
-          eventClass: 'SECURITY',
-          action: 'payment.release.webauthn_rejected',
-          objectType: 'PaymentBatch',
-          objectId: batchId,
-          outcome: 'DENIED',
-          correlationId,
-          securityContext: c.get('securityContext') as unknown as Record<string, unknown>,
-          detail: { challengeId: body.challengeId },
-        }),
-      );
-      throw authenticationError(
-        'WEBAUTHN_SIGNATURE_INVALID',
-        'The security key signature could not be verified. This attempt has been recorded.',
-      );
-    }
+      if (!verified) {
+        await inTransaction(sql, (tx) =>
+          writeAuditEvent(tx, {
+            organizationId: actor.organizationId,
+            actorId: actor.userId,
+            actorLevel: actor.level,
+            eventClass: 'SECURITY',
+            action: 'payment.release.webauthn_rejected',
+            objectType: 'PaymentBatch',
+            objectId: batchId,
+            outcome: 'DENIED',
+            correlationId,
+            securityContext: c.get('securityContext'),
+            detail: { challengeId: body.challengeId },
+          }),
+        );
+        throw authenticationError(
+          'WEBAUTHN_SIGNATURE_INVALID',
+          'The security key signature could not be verified. This attempt has been recorded.',
+        );
+      }
 
-    // ---- Release ----------------------------------------------------------
-    const released = await releaseBatch({
-      sql,
-      env: c.env,
-      actor,
-      batchId,
-      challengeId: body.challengeId,
-      webauthnVerified: true,
-      webauthnCredentialId: credential.id,
-      authorizationPin: body.authorizationPin,
-      acknowledgements: body.acknowledgements,
-      correlationId,
-      securityContext: c.get('securityContext') as unknown as Record<string, unknown>,
-    });
+      // ---- Release ----------------------------------------------------------
+      const released = await releaseBatch({
+        sql,
+        env: c.env,
+        actor,
+        batchId,
+        challengeId: body.challengeId,
+        webauthnVerified: true,
+        webauthnCredentialId: credential.id,
+        authorizationPin: body.authorizationPin,
+        acknowledgements: body.acknowledgements,
+        correlationId,
+        securityContext: c.get('securityContext'),
+      });
 
-    // ---- Enqueue execution -------------------------------------------------
-    // After the release transaction has committed, so a rollback cannot leave payment
-    // messages on the queue for a batch that was never actually authorized.
-    const instructions = await sql<
-      { id: string; msisdn_snapshot: string; amount_cents: string }[]
-    >`
+      // ---- Enqueue execution -------------------------------------------------
+      // After the release transaction has committed, so a rollback cannot leave payment
+      // messages on the queue for a batch that was never actually authorized.
+      const instructions = await sql<
+        { id: string; msisdn_snapshot: string; amount_cents: string }[]
+      >`
       SELECT id, msisdn_snapshot, amount_cents
         FROM payment_instructions WHERE batch_id = ${batchId} ORDER BY id
     `;
-    const batchVersionRows = await sql<{ version: number }[]>`
+      const batchVersionRows = await sql<{ version: number }[]>`
       SELECT version FROM payment_batches WHERE id = ${batchId}
     `;
-    const batchVersion = batchVersionRows[0]!.version;
+      const batchVersion = batchVersionRows[0]!.version;
 
-    const messages: { body: PaymentQueueMessage }[] = [];
-    for (const instruction of instructions) {
-      messages.push({
-        body: {
-          type: 'EXECUTE_INSTRUCTION',
-          organizationId: actor.organizationId,
-          batchId,
-          instructionId: instruction.id,
-          batchVersion,
-          manifestHash: released.manifestHash,
-          fingerprint: await instructionFingerprint({
+      const messages: { body: PaymentQueueMessage }[] = [];
+      for (const instruction of instructions) {
+        messages.push({
+          body: {
+            type: 'EXECUTE_INSTRUCTION',
             organizationId: actor.organizationId,
             batchId,
             instructionId: instruction.id,
             batchVersion,
-            msisdn: instruction.msisdn_snapshot,
-            amountCents: Number(instruction.amount_cents),
             manifestHash: released.manifestHash,
-          }),
-          challengeId: body.challengeId,
-          correlationId,
-          attempt: 0,
-        },
-      });
-    }
+            fingerprint: await instructionFingerprint({
+              organizationId: actor.organizationId,
+              batchId,
+              instructionId: instruction.id,
+              batchVersion,
+              msisdn: instruction.msisdn_snapshot,
+              amountCents: Number(instruction.amount_cents),
+              manifestHash: released.manifestHash,
+            }),
+            challengeId: body.challengeId,
+            correlationId,
+            attempt: 0,
+          },
+        });
+      }
 
-    // Cloudflare Queues caps a batch send at 100 messages.
-    for (let i = 0; i < messages.length; i += 100) {
-      await c.env.PAYMENT_QUEUE.sendBatch(messages.slice(i, i + 100));
-    }
+      // Cloudflare Queues caps a batch send at 100 messages.
+      for (let i = 0; i < messages.length; i += 100) {
+        await c.env.PAYMENT_QUEUE.sendBatch(messages.slice(i, i + 100));
+      }
 
-    await sql`
+      await sql`
       UPDATE payment_batches SET state = 'QUEUED' WHERE id = ${batchId} AND state = 'AUTHORIZED'
     `;
 
-    return released;
-  });
+      return released;
+    });
 
-  return c.json(
-    {
-      released: true,
-      batchId: outcome.batchId,
-      batchReference: outcome.batchReference,
-      instructionsQueued: outcome.instructionsQueued,
-      totalAmountCents: outcome.totalAmountCents,
-      manifestHash: outcome.manifestHash,
-      releasedAt: outcome.releasedAt,
-      message: `KES ${formatCents(outcome.totalAmountCents)} released to ${outcome.instructionsQueued} recipients. Payments are now being submitted to M-PESA; follow their progress in Transactions.`,
-    },
-    202,
-  );
-});
+    return c.json(
+      {
+        released: true,
+        batchId: outcome.batchId,
+        batchReference: outcome.batchReference,
+        instructionsQueued: outcome.instructionsQueued,
+        totalAmountCents: outcome.totalAmountCents,
+        manifestHash: outcome.manifestHash,
+        releasedAt: outcome.releasedAt,
+        message: `KES ${formatCents(outcome.totalAmountCents)} released to ${outcome.instructionsQueued} recipients. Payments are now being submitted to M-PESA; follow their progress in Transactions.`,
+      },
+      202,
+    );
+  },
+);
 
 /** POST /authorization/batches/:id/abandon — close an open ceremony without releasing. */
 authorizationRoutes.post(
@@ -297,7 +315,7 @@ authorizationRoutes.post(
         batchId,
         reason: body.reason ?? 'Abandoned by the authorizer',
         correlationId: c.get('correlationId'),
-        securityContext: c.get('securityContext') as unknown as Record<string, unknown>,
+        securityContext: c.get('securityContext'),
       }),
     );
 

@@ -12,7 +12,12 @@
  *    operator fixes the file rather than guessing (§22 "expose row-level reasons").
  */
 
-import { parseAmountToCents, DARAJA_B2C_MIN_CENTS, DARAJA_B2C_MAX_CENTS, formatCents } from './money.js';
+import {
+  parseAmountToCents,
+  DARAJA_B2C_MIN_CENTS,
+  DARAJA_B2C_MAX_CENTS,
+  formatCents,
+} from './money.js';
 import { tryNormalizeMsisdn } from './msisdn.js';
 import { SolvarenError, validationError } from './errors.js';
 
@@ -134,7 +139,7 @@ export function parseCsvGrid(text: string): string[][] {
 }
 
 function normalizeHeader(h: string): string {
-  return h.trim().toLowerCase().replace(/[_\-]+/g, ' ').replace(/\s+/g, ' ');
+  return h.trim().toLowerCase().replace(/[_-]+/g, ' ').replace(/\s+/g, ' ');
 }
 
 export function mapColumns(header: readonly string[]): Partial<Record<CsvColumnKey, number>> {
@@ -165,7 +170,10 @@ export function parsePaymentCsv(text: string, options: CsvParseOptions = {}): Cs
   const maxRows = options.maxRows ?? MAX_CSV_ROWS;
 
   if (text.length > MAX_CSV_BYTES) {
-    throw validationError('CSV_TOO_LARGE', `The file exceeds the ${MAX_CSV_BYTES / (1024 * 1024)} MB upload limit`);
+    throw validationError(
+      'CSV_TOO_LARGE',
+      `The file exceeds the ${MAX_CSV_BYTES / (1024 * 1024)} MB upload limit`,
+    );
   }
 
   const grid = parseCsvGrid(text);
@@ -177,11 +185,15 @@ export function parsePaymentCsv(text: string, options: CsvParseOptions = {}): Cs
   const mapping = mapColumns(header);
   const missing = REQUIRED_COLUMNS.filter((c) => mapping[c] === undefined);
   if (missing.length > 0) {
-    throw validationError('CSV_MISSING_COLUMNS', `The file is missing required columns: ${missing.join(', ')}`, {
-      missing,
-      detected: header,
-      expected: REQUIRED_COLUMNS.map((c) => CSV_COLUMNS[c][0]),
-    });
+    throw validationError(
+      'CSV_MISSING_COLUMNS',
+      `The file is missing required columns: ${missing.join(', ')}`,
+      {
+        missing,
+        detected: header,
+        expected: REQUIRED_COLUMNS.map((c) => CSV_COLUMNS[c][0]),
+      },
+    );
   }
 
   const dataRows = grid.slice(1);
@@ -189,10 +201,14 @@ export function parsePaymentCsv(text: string, options: CsvParseOptions = {}): Cs
     throw validationError('CSV_NO_ROWS', 'The file contains a header but no payment rows');
   }
   if (dataRows.length > maxRows) {
-    throw validationError('CSV_TOO_MANY_ROWS', `The file contains ${dataRows.length} rows; the limit is ${maxRows}`, {
-      rowCount: dataRows.length,
-      maxRows,
-    });
+    throw validationError(
+      'CSV_TOO_MANY_ROWS',
+      `The file contains ${dataRows.length} rows; the limit is ${maxRows}`,
+      {
+        rowCount: dataRows.length,
+        maxRows,
+      },
+    );
   }
 
   const rows: ParsedRow[] = [];
@@ -215,16 +231,31 @@ export function parsePaymentCsv(text: string, options: CsvParseOptions = {}): Cs
     let rowFailed = false;
 
     if (name === '') {
-      errors.push({ lineNumber, column: 'recipientName', value: name, reason: 'Recipient name is required' });
+      errors.push({
+        lineNumber,
+        column: 'recipientName',
+        value: name,
+        reason: 'Recipient name is required',
+      });
       rowFailed = true;
     } else if (name.length > 140) {
-      errors.push({ lineNumber, column: 'recipientName', value: name, reason: 'Recipient name exceeds 140 characters' });
+      errors.push({
+        lineNumber,
+        column: 'recipientName',
+        value: name,
+        reason: 'Recipient name exceeds 140 characters',
+      });
       rowFailed = true;
     }
 
     const phone = tryNormalizeMsisdn(phoneRaw);
     if (!phone.ok) {
-      errors.push({ lineNumber, column: 'msisdn', value: phoneRaw, reason: phone.reason ?? 'Invalid phone number' });
+      errors.push({
+        lineNumber,
+        column: 'msisdn',
+        value: phoneRaw,
+        reason: phone.reason ?? 'Invalid phone number',
+      });
       rowFailed = true;
     }
 
@@ -234,14 +265,20 @@ export function parsePaymentCsv(text: string, options: CsvParseOptions = {}): Cs
         lineNumber,
         column: 'amount',
         value: amountRaw,
-        reason: 'Amount looks like a spreadsheet formula rather than a number. Paste values, not formulas.',
+        reason:
+          'Amount looks like a spreadsheet formula rather than a number. Paste values, not formulas.',
       });
       rowFailed = true;
     } else {
       try {
         amountCents = parseAmountToCents(amountRaw);
         if (amountCents <= 0) {
-          errors.push({ lineNumber, column: 'amount', value: amountRaw, reason: 'Amount must be greater than zero' });
+          errors.push({
+            lineNumber,
+            column: 'amount',
+            value: amountRaw,
+            reason: 'Amount must be greater than zero',
+          });
           rowFailed = true;
         } else if (amountCents % 100 !== 0) {
           errors.push({

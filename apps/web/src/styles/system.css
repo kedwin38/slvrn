@@ -74,10 +74,10 @@
    * reader's preferred hinting, and costs nothing to load — which matters when the
    * console is opened on a phone over a mobile network mid-payroll.
    */
-  --font-ui: ui-sans-serif, -apple-system, 'Segoe UI', Inter, Roboto, 'Helvetica Neue',
-    Arial, sans-serif;
-  --font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', 'Cascadia Mono', Menlo, Consolas,
-    monospace;
+  --font-ui:
+    ui-sans-serif, -apple-system, 'Segoe UI', Inter, Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-mono:
+    ui-monospace, 'SF Mono', 'JetBrains Mono', 'Cascadia Mono', Menlo, Consolas, monospace;
 
   --text-2xs: 0.6875rem; /* 11px — table metadata */
   --text-xs: 0.75rem;
@@ -159,7 +159,7 @@
     --info-border: oklch(39% 0.068 236);
 
     --neutral: oklch(70% 0.012 258);
-    --neutral-soft: oklch(26% 0.010 258);
+    --neutral-soft: oklch(26% 0.01 258);
     --neutral-border: oklch(36% 0.012 258);
 
     --shadow-sm: 0 1px 2px oklch(0% 0 0 / 0.28);
@@ -199,7 +199,7 @@
   --info-soft: oklch(26% 0.045 236);
   --info-border: oklch(39% 0.068 236);
   --neutral: oklch(70% 0.012 258);
-  --neutral-soft: oklch(26% 0.010 258);
+  --neutral-soft: oklch(26% 0.01 258);
   --neutral-border: oklch(36% 0.012 258);
   --shadow-sm: 0 1px 2px oklch(0% 0 0 / 0.28);
   --shadow: 0 2px 6px oklch(0% 0 0 / 0.34);
@@ -292,7 +292,9 @@ textarea {
  */
 .amount {
   font-variant-numeric: tabular-nums slashed-zero;
-  font-feature-settings: 'tnum' 1, 'zero' 1;
+  font-feature-settings:
+    'tnum' 1,
+    'zero' 1;
   letter-spacing: -0.01em;
   white-space: nowrap;
 }
@@ -492,7 +494,9 @@ textarea {
   text-align: left;
   width: 100%;
   cursor: pointer;
-  transition: background var(--duration-fast) var(--ease), color var(--duration-fast) var(--ease);
+  transition:
+    background var(--duration-fast) var(--ease),
+    color var(--duration-fast) var(--ease);
 }
 
 .nav-item:hover {

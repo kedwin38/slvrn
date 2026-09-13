@@ -52,9 +52,30 @@ function parseArguments(argv) {
  */
 function generatePassphrase() {
   const words = [
-    'harbour', 'lantern', 'meridian', 'quartz', 'thistle', 'vellum', 'cobalt', 'juniper',
-    'saffron', 'obsidian', 'kestrel', 'marigold', 'pewter', 'tamarind', 'zephyr', 'alcove',
-    'bramble', 'cardamom', 'dovetail', 'ember', 'fathom', 'granite', 'hollow', 'ivory',
+    'harbour',
+    'lantern',
+    'meridian',
+    'quartz',
+    'thistle',
+    'vellum',
+    'cobalt',
+    'juniper',
+    'saffron',
+    'obsidian',
+    'kestrel',
+    'marigold',
+    'pewter',
+    'tamarind',
+    'zephyr',
+    'alcove',
+    'bramble',
+    'cardamom',
+    'dovetail',
+    'ember',
+    'fathom',
+    'granite',
+    'hollow',
+    'ivory',
   ];
   const bytes = new Uint8Array(5);
   crypto.getRandomValues(bytes);

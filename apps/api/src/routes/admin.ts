@@ -19,7 +19,12 @@ import {
   GENESIS_HASH,
   type AuditEvent,
 } from '@solvaren/core';
-import { requireAuth, requirePermissions, requireExactLevel, actorOf } from '../middleware/security.js';
+import {
+  requireAuth,
+  requirePermissions,
+  requireExactLevel,
+  actorOf,
+} from '../middleware/security.js';
 import { withConnection, inTransaction } from '../db/client.js';
 import { writeAuditEvent } from '../db/audit-writer.js';
 import {
@@ -44,7 +49,9 @@ const darajaConfigSchema = z.object({
   environment: z.enum(['sandbox', 'production']),
   shortCode: z.string().regex(/^\d{5,9}$/, 'The shortcode must be 5 to 9 digits'),
   initiatorName: z.string().trim().min(1).max(64),
-  commandId: z.enum(['BusinessPayment', 'SalaryPayment', 'PromotionPayment']).default('BusinessPayment'),
+  commandId: z
+    .enum(['BusinessPayment', 'SalaryPayment', 'PromotionPayment'])
+    .default('BusinessPayment'),
   consumerKey: z.string().trim().min(10).max(200),
   consumerSecret: z.string().trim().min(10).max(200),
   initiatorPasswordOrCredential: z.string().trim().min(8).max(2000),
@@ -100,10 +107,12 @@ adminRoutes.post(
           objectType: 'DarajaConfiguration',
           objectId: config.id,
           outcome: 'SUCCESS',
-          previousState: previous[0] ? { credentialVersion: previous[0].credential_version, status: previous[0].status } : null,
+          previousState: previous[0]
+            ? { credentialVersion: previous[0].credential_version, status: previous[0].status }
+            : null,
           newState: { credentialVersion: config.credentialVersion, status: config.status },
           correlationId,
-          securityContext: c.get('securityContext') as unknown as Record<string, unknown>,
+          securityContext: c.get('securityContext'),
           // Only the shape of the change is recorded. `redactForAudit` would strip the
           // credential fields even if a future edit tried to include them.
           detail: {
@@ -128,20 +137,25 @@ adminRoutes.post(
 );
 
 /** GET /admin/daraja — the masked configuration view. */
-adminRoutes.get('/daraja', requireExactLevel('L3'), requirePermissions('admin:daraja'), async (c) => {
-  const actor = actorOf(c);
+adminRoutes.get(
+  '/daraja',
+  requireExactLevel('L3'),
+  requirePermissions('admin:daraja'),
+  async (c) => {
+    const actor = actorOf(c);
 
-  const configs = await withConnection(c.env, c.executionCtx, async (sql) => {
-    const rows = await sql<DarajaConfigRow[]>`
+    const configs = await withConnection(c.env, c.executionCtx, async (sql) => {
+      const rows = await sql<DarajaConfigRow[]>`
       SELECT * FROM daraja_configurations
        WHERE organization_id = ${actor.organizationId}
        ORDER BY environment
     `;
-    return rows.map(maskConfig);
-  });
+      return rows.map(maskConfig);
+    });
 
-  return c.json({ configurations: configs });
-});
+    return c.json({ configurations: configs });
+  },
+);
 
 /** POST /admin/daraja/:id/test — prove the credentials work without moving money. */
 adminRoutes.post(
@@ -174,7 +188,7 @@ adminRoutes.post(
           objectId: configId,
           outcome: test.ok ? 'SUCCESS' : 'FAILURE',
           correlationId,
-          securityContext: c.get('securityContext') as unknown as Record<string, unknown>,
+          securityContext: c.get('securityContext'),
           detail: { ok: test.ok, message: test.message, latencyMs: test.latencyMs },
         });
       });
@@ -204,7 +218,8 @@ adminRoutes.post(
            WHERE id = ${configId} AND organization_id = ${actor.organizationId}
         `;
         const config = rows[0];
-        if (!config) throw notFoundError('DARAJA_CONFIG_NOT_FOUND', 'That configuration could not be found');
+        if (!config)
+          throw notFoundError('DARAJA_CONFIG_NOT_FOUND', 'That configuration could not be found');
 
         // The database constraint enforces this too; checking here produces a better message.
         if (config.last_test_ok !== true) {
@@ -236,7 +251,7 @@ adminRoutes.post(
           outcome: 'SUCCESS',
           newState: { status: 'ENABLED' },
           correlationId,
-          securityContext: c.get('securityContext') as unknown as Record<string, unknown>,
+          securityContext: c.get('securityContext'),
           detail: { environment: config.environment },
         });
       }),
@@ -273,7 +288,7 @@ adminRoutes.post(
           outcome: 'SUCCESS',
           newState: { status: 'DISABLED' },
           correlationId: c.get('correlationId'),
-          securityContext: c.get('securityContext') as unknown as Record<string, unknown>,
+          securityContext: c.get('securityContext'),
           detail: { reason: body.reason },
         });
       }),
@@ -320,8 +335,14 @@ adminRoutes.post(
       const secretRef = secretReference(actor.organizationId, 'backup', 'secret_key');
 
       // BAK-002: credentials are masked after save and held by the secrets mechanism.
-      await store.put(accessRef, await encryptSecret(body.accessKeyId, c.env.SECRET_ENCRYPTION_KEY));
-      await store.put(secretRef, await encryptSecret(body.secretAccessKey, c.env.SECRET_ENCRYPTION_KEY));
+      await store.put(
+        accessRef,
+        await encryptSecret(body.accessKeyId, c.env.SECRET_ENCRYPTION_KEY),
+      );
+      await store.put(
+        secretRef,
+        await encryptSecret(body.secretAccessKey, c.env.SECRET_ENCRYPTION_KEY),
+      );
 
       const rows = await sql<{ id: string; status: string }[]>`
         INSERT INTO backup_configurations (
@@ -360,7 +381,7 @@ adminRoutes.post(
           objectId: rows[0]!.id,
           outcome: 'SUCCESS',
           correlationId,
-          securityContext: c.get('securityContext') as unknown as Record<string, unknown>,
+          securityContext: c.get('securityContext'),
           detail: {
             provider: body.providerLabel,
             bucket: body.bucket,
@@ -426,7 +447,7 @@ adminRoutes.post(
           objectId: attemptReference,
           outcome: 'SUCCESS',
           correlationId,
-          securityContext: c.get('securityContext') as unknown as Record<string, unknown>,
+          securityContext: c.get('securityContext'),
           detail: { trigger: 'MANUAL', attemptReference },
         }),
       );
@@ -437,7 +458,8 @@ adminRoutes.post(
       {
         accepted: true,
         attemptReference,
-        message: 'The backup has been queued. Its progress and result appear in the backup history.',
+        message:
+          'The backup has been queued. Its progress and result appear in the backup history.',
       },
       202,
     );
@@ -445,35 +467,39 @@ adminRoutes.post(
 );
 
 /** GET /admin/backups — configuration, latest result and attempt history (BAK-008). */
-adminRoutes.get('/backups', requireExactLevel('L3'), requirePermissions('admin:backups'), async (c) => {
-  const actor = actorOf(c);
+adminRoutes.get(
+  '/backups',
+  requireExactLevel('L3'),
+  requirePermissions('admin:backups'),
+  async (c) => {
+    const actor = actorOf(c);
 
-  const data = await withConnection(c.env, c.executionCtx, async (sql) => {
-    const configs = await sql<
-      {
-        id: string;
-        provider_label: string;
-        bucket: string;
-        path_prefix: string;
-        region: string | null;
-        endpoint: string | null;
-        access_key_last_four: string | null;
-        encryption_mode: string;
-        status: string;
-        last_test_at: string | null;
-        last_test_ok: boolean | null;
-        last_test_message: string | null;
-        schedule_enabled: boolean;
-        schedule_cron: string | null;
-        schedule_timezone: string;
-        retention_max_count: number;
-        last_scheduled_run_at: string | null;
-        next_scheduled_run_at: string | null;
-        consecutive_failures: number;
-        suspended_at: string | null;
-        suspension_reason: string | null;
-      }[]
-    >`
+    const data = await withConnection(c.env, c.executionCtx, async (sql) => {
+      const configs = await sql<
+        {
+          id: string;
+          provider_label: string;
+          bucket: string;
+          path_prefix: string;
+          region: string | null;
+          endpoint: string | null;
+          access_key_last_four: string | null;
+          encryption_mode: string;
+          status: string;
+          last_test_at: string | null;
+          last_test_ok: boolean | null;
+          last_test_message: string | null;
+          schedule_enabled: boolean;
+          schedule_cron: string | null;
+          schedule_timezone: string;
+          retention_max_count: number;
+          last_scheduled_run_at: string | null;
+          next_scheduled_run_at: string | null;
+          consecutive_failures: number;
+          suspended_at: string | null;
+          suspension_reason: string | null;
+        }[]
+      >`
       SELECT id, provider_label, bucket, path_prefix, region, endpoint, access_key_last_four,
              encryption_mode, status, last_test_at, last_test_ok, last_test_message,
              schedule_enabled, schedule_cron, schedule_timezone, retention_max_count,
@@ -482,22 +508,22 @@ adminRoutes.get('/backups', requireExactLevel('L3'), requirePermissions('admin:b
         FROM backup_configurations WHERE organization_id = ${actor.organizationId}
     `;
 
-    const attempts = await sql<
-      {
-        attempt_reference: string;
-        trigger_type: string;
-        status: string;
-        started_at: string;
-        ended_at: string | null;
-        size_bytes: string | null;
-        checksum: string | null;
-        object_key: string | null;
-        error_message: string | null;
-        retention_deleted_count: number;
-        retention_complete: boolean;
-        object_retired_at: string | null;
-      }[]
-    >`
+      const attempts = await sql<
+        {
+          attempt_reference: string;
+          trigger_type: string;
+          status: string;
+          started_at: string;
+          ended_at: string | null;
+          size_bytes: string | null;
+          checksum: string | null;
+          object_key: string | null;
+          error_message: string | null;
+          retention_deleted_count: number;
+          retention_complete: boolean;
+          object_retired_at: string | null;
+        }[]
+      >`
       SELECT attempt_reference, trigger_type, status, started_at, ended_at, size_bytes,
              checksum, object_key, error_message, retention_deleted_count, retention_complete,
              object_retired_at
@@ -507,74 +533,77 @@ adminRoutes.get('/backups', requireExactLevel('L3'), requirePermissions('admin:b
        LIMIT 100
     `;
 
-    const config = configs[0];
-    const latest = attempts[0] ?? null;
+      const config = configs[0];
+      const latest = attempts[0] ?? null;
 
-    return {
-      configuration: config
-        ? {
-            configurationId: config.id,
-            providerLabel: config.provider_label,
-            bucket: config.bucket,
-            pathPrefix: config.path_prefix,
-            region: config.region,
-            endpoint: config.endpoint,
-            // Credentials are masked after save (BAK-002); the plaintext is unreachable
-            // from any API response.
-            accessKeyMasked: config.access_key_last_four ? `••••••••${config.access_key_last_four}` : '••••••••',
-            secretKeyMasked: '••••••••',
-            encryptionMode: config.encryption_mode,
-            status: config.status,
-            lastTestAt: config.last_test_at,
-            lastTestOk: config.last_test_ok,
-            lastTestMessage: config.last_test_message,
-            scheduleEnabled: config.schedule_enabled,
-            scheduleCron: config.schedule_cron,
-            scheduleTimezone: config.schedule_timezone,
-            retentionMaxCount: config.retention_max_count,
-            lastScheduledRunAt: config.last_scheduled_run_at,
-            nextScheduledRunAt: config.next_scheduled_run_at,
-            suspended: config.suspended_at !== null,
-            suspensionReason: config.suspension_reason,
-            consecutiveFailures: config.consecutive_failures,
-          }
-        : null,
-      // BAK-008: the most recent result is always visible, and a failure is shown as a
-      // failure — never smoothed into "no recent backups".
-      latestResult: latest
-        ? {
-            attemptReference: latest.attempt_reference,
-            trigger: latest.trigger_type,
-            status: latest.status,
-            startedAt: latest.started_at,
-            endedAt: latest.ended_at,
-            sizeBytes: latest.size_bytes ? Number(latest.size_bytes) : null,
-            checksum: latest.checksum,
-            errorMessage: latest.error_message,
-            retentionDeletedCount: latest.retention_deleted_count,
-            retentionComplete: latest.retention_complete,
-          }
-        : null,
-      history: attempts.map((a) => ({
-        attemptReference: a.attempt_reference,
-        trigger: a.trigger_type,
-        status: a.status,
-        startedAt: a.started_at,
-        endedAt: a.ended_at,
-        sizeBytes: a.size_bytes ? Number(a.size_bytes) : null,
-        errorMessage: a.error_message,
-        // The object key is retained on the record as evidence of what was written; the
-        // retirement marker is what says whether it is still restorable.
-        objectRetained: a.object_key !== null && a.object_retired_at === null,
-        objectRetiredAt: a.object_retired_at,
-      })),
-      restoreValidationNote:
-        'A backup that has never been restore-validated is not disaster-recovery proven. See docs/runbooks/backup-restore.md.',
-    };
-  });
+      return {
+        configuration: config
+          ? {
+              configurationId: config.id,
+              providerLabel: config.provider_label,
+              bucket: config.bucket,
+              pathPrefix: config.path_prefix,
+              region: config.region,
+              endpoint: config.endpoint,
+              // Credentials are masked after save (BAK-002); the plaintext is unreachable
+              // from any API response.
+              accessKeyMasked: config.access_key_last_four
+                ? `••••••••${config.access_key_last_four}`
+                : '••••••••',
+              secretKeyMasked: '••••••••',
+              encryptionMode: config.encryption_mode,
+              status: config.status,
+              lastTestAt: config.last_test_at,
+              lastTestOk: config.last_test_ok,
+              lastTestMessage: config.last_test_message,
+              scheduleEnabled: config.schedule_enabled,
+              scheduleCron: config.schedule_cron,
+              scheduleTimezone: config.schedule_timezone,
+              retentionMaxCount: config.retention_max_count,
+              lastScheduledRunAt: config.last_scheduled_run_at,
+              nextScheduledRunAt: config.next_scheduled_run_at,
+              suspended: config.suspended_at !== null,
+              suspensionReason: config.suspension_reason,
+              consecutiveFailures: config.consecutive_failures,
+            }
+          : null,
+        // BAK-008: the most recent result is always visible, and a failure is shown as a
+        // failure — never smoothed into "no recent backups".
+        latestResult: latest
+          ? {
+              attemptReference: latest.attempt_reference,
+              trigger: latest.trigger_type,
+              status: latest.status,
+              startedAt: latest.started_at,
+              endedAt: latest.ended_at,
+              sizeBytes: latest.size_bytes ? Number(latest.size_bytes) : null,
+              checksum: latest.checksum,
+              errorMessage: latest.error_message,
+              retentionDeletedCount: latest.retention_deleted_count,
+              retentionComplete: latest.retention_complete,
+            }
+          : null,
+        history: attempts.map((a) => ({
+          attemptReference: a.attempt_reference,
+          trigger: a.trigger_type,
+          status: a.status,
+          startedAt: a.started_at,
+          endedAt: a.ended_at,
+          sizeBytes: a.size_bytes ? Number(a.size_bytes) : null,
+          errorMessage: a.error_message,
+          // The object key is retained on the record as evidence of what was written; the
+          // retirement marker is what says whether it is still restorable.
+          objectRetained: a.object_key !== null && a.object_retired_at === null,
+          objectRetiredAt: a.object_retired_at,
+        })),
+        restoreValidationNote:
+          'A backup that has never been restore-validated is not disaster-recovery proven. See docs/runbooks/backup-restore.md.',
+      };
+    });
 
-  return c.json(data);
-});
+    return c.json(data);
+  },
+);
 
 /** PATCH /admin/backups/schedule — enable or disable recurring backups (BAK-006). */
 adminRoutes.patch(
@@ -597,7 +626,8 @@ adminRoutes.patch(
         const rows = await tx<{ last_test_ok: boolean | null }[]>`
           SELECT last_test_ok FROM backup_configurations WHERE organization_id = ${actor.organizationId}
         `;
-        if (!rows[0]) throw notFoundError('BACKUP_NOT_CONFIGURED', 'No backup target is configured');
+        if (!rows[0])
+          throw notFoundError('BACKUP_NOT_CONFIGURED', 'No backup target is configured');
         if (body.enabled && rows[0].last_test_ok !== true) {
           throw stateError(
             'BACKUP_TEST_REQUIRED',
@@ -624,7 +654,7 @@ adminRoutes.patch(
           objectId: actor.organizationId,
           outcome: 'SUCCESS',
           correlationId: c.get('correlationId'),
-          securityContext: c.get('securityContext') as unknown as Record<string, unknown>,
+          securityContext: c.get('securityContext'),
           detail: { cron: body.cron, retentionMaxCount: body.retentionMaxCount },
         });
       }),
@@ -638,12 +668,19 @@ adminRoutes.patch(
 // Policies (spec 20)
 // ---------------------------------------------------------------------------
 
-adminRoutes.get('/policies', requireExactLevel('L3'), requirePermissions('admin:policies'), async (c) => {
-  const actor = actorOf(c);
-  const { loadPolicy } = await import('../services/policy-store.js');
-  const policy = await withConnection(c.env, c.executionCtx, (sql) => loadPolicy(sql, actor.organizationId));
-  return c.json({ policy });
-});
+adminRoutes.get(
+  '/policies',
+  requireExactLevel('L3'),
+  requirePermissions('admin:policies'),
+  async (c) => {
+    const actor = actorOf(c);
+    const { loadPolicy } = await import('../services/policy-store.js');
+    const policy = await withConnection(c.env, c.executionCtx, (sql) =>
+      loadPolicy(sql, actor.organizationId),
+    );
+    return c.json({ policy });
+  },
+);
 
 adminRoutes.patch(
   '/policies',
@@ -700,7 +737,7 @@ adminRoutes.patch(
           previousState: before,
           newState: merged,
           correlationId,
-          securityContext: c.get('securityContext') as unknown as Record<string, unknown>,
+          securityContext: c.get('securityContext'),
           detail: { changedFields: Object.keys(body) },
         });
 
@@ -777,7 +814,10 @@ adminRoutes.post(
   async (c) => {
     const actor = actorOf(c);
     const body = z
-      .object({ fromSequence: z.number().int().min(1).default(1), limit: z.number().int().min(1).max(5000).default(1000) })
+      .object({
+        fromSequence: z.number().int().min(1).default(1),
+        limit: z.number().int().min(1).max(5000).default(1000),
+      })
       .parse(await c.req.json().catch(() => ({})));
 
     const verification = await withConnection(c.env, c.executionCtx, async (sql) => {
@@ -835,12 +875,12 @@ adminRoutes.post(
       const startHash =
         body.fromSequence === 1
           ? GENESIS_HASH
-          : (
+          : ((
               await sql<{ event_hash: string }[]>`
                 SELECT event_hash FROM audit_events
                  WHERE organization_id = ${actor.organizationId} AND sequence = ${body.fromSequence - 1}
               `
-            )[0]?.event_hash ?? GENESIS_HASH;
+            )[0]?.event_hash ?? GENESIS_HASH);
 
       return verifyChain(events, startHash);
     });

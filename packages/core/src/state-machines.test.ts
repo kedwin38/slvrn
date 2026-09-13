@@ -81,7 +81,10 @@ describe('batch lifecycle state machine (§5.1)', () => {
     for (const edge of systemEdges) {
       expect(() =>
         assertTransition(edge.from, edge.command, {
-          actor: { level: 'L3', permissions: new Set<Permission>(['payment:release', 'batch:cancel']) },
+          actor: {
+            level: 'L3',
+            permissions: new Set<Permission>(['payment:release', 'batch:cancel']),
+          },
         }),
       ).toThrow(/only be issued by the payment execution system/);
       expect(() => assertTransition(edge.from, edge.command, { system: true })).not.toThrow();
@@ -127,14 +130,18 @@ describe('batch lifecycle state machine (§5.1)', () => {
   });
 
   it('an edit after validation forces revalidation rather than silent progress', () => {
-    const edge = assertTransition('VALIDATED', 'INVALIDATE', { actor: withPermissions('batch:edit') });
+    const edge = assertTransition('VALIDATED', 'INVALIDATE', {
+      actor: withPermissions('batch:edit'),
+    });
     expect(edge.to).toBe('DRAFT');
   });
 });
 
 describe('transaction state machine (§6.1, §9.2)', () => {
   it('accepts the normal settlement path with provider evidence', () => {
-    expect(assertTxnTransition({ from: 'PENDING', to: 'SUBMITTED', source: 'SYSTEM' }).to).toBe('SUBMITTED');
+    expect(assertTxnTransition({ from: 'PENDING', to: 'SUBMITTED', source: 'SYSTEM' }).to).toBe(
+      'SUBMITTED',
+    );
     expect(
       assertTxnTransition({ from: 'SUBMITTED', to: 'AWAITING_CALLBACK', source: 'SYNC_ACK' }).to,
     ).toBe('AWAITING_CALLBACK');
@@ -151,7 +158,12 @@ describe('transaction state machine (§6.1, §9.2)', () => {
   it('§23: a SUCCESS cannot be forged without provider evidence', () => {
     // No receipt.
     expect(() =>
-      assertTxnTransition({ from: 'PROCESSING', to: 'SUCCESS', source: 'CALLBACK', providerReceipt: '' }),
+      assertTxnTransition({
+        from: 'PROCESSING',
+        to: 'SUCCESS',
+        source: 'CALLBACK',
+        providerReceipt: '',
+      }),
     ).toThrow(/receipt number/);
     // Internal actor claiming success.
     expect(() =>
@@ -165,11 +177,16 @@ describe('transaction state machine (§6.1, §9.2)', () => {
   });
 
   it('TRK-002: a FAILED transition requires a failure code, so no failure is ever blank', () => {
-    expect(() => assertTxnTransition({ from: 'PROCESSING', to: 'FAILED', source: 'CALLBACK' })).toThrow(
-      /provider failure code/,
-    );
+    expect(() =>
+      assertTxnTransition({ from: 'PROCESSING', to: 'FAILED', source: 'CALLBACK' }),
+    ).toThrow(/provider failure code/);
     expect(
-      assertTxnTransition({ from: 'PROCESSING', to: 'FAILED', source: 'CALLBACK', failureCode: '1' }).to,
+      assertTxnTransition({
+        from: 'PROCESSING',
+        to: 'FAILED',
+        source: 'CALLBACK',
+        failureCode: '1',
+      }).to,
     ).toBe('FAILED');
   });
 
@@ -200,7 +217,11 @@ describe('transaction state machine (§6.1, §9.2)', () => {
   });
 
   it('a timeout opens reconciliation rather than settling', () => {
-    const result = assertTxnTransition({ from: 'SUBMITTED', to: 'TIMEOUT', source: 'QUEUE_TIMEOUT' });
+    const result = assertTxnTransition({
+      from: 'SUBMITTED',
+      to: 'TIMEOUT',
+      source: 'QUEUE_TIMEOUT',
+    });
     expect(result.opensReconciliation).toBe(true);
   });
 
@@ -214,14 +235,19 @@ describe('transaction state machine (§6.1, §9.2)', () => {
       }).to,
     ).toBe('SUCCESS');
     expect(
-      assertTxnTransition({ from: 'RECONCILING', to: 'FAILED', source: 'STATUS_QUERY', failureCode: '1' }).to,
+      assertTxnTransition({
+        from: 'RECONCILING',
+        to: 'FAILED',
+        source: 'STATUS_QUERY',
+        failureCode: '1',
+      }).to,
     ).toBe('FAILED');
   });
 
   it('rejects transitions that are not in the graph', () => {
-    expect(() => assertTxnTransition({ from: 'PENDING', to: 'PROCESSING', source: 'SYSTEM' })).toThrow(
-      /cannot move from PENDING to PROCESSING/,
-    );
+    expect(() =>
+      assertTxnTransition({ from: 'PENDING', to: 'PROCESSING', source: 'SYSTEM' }),
+    ).toThrow(/cannot move from PENDING to PROCESSING/);
   });
 
   it('classifies every state for the explorer chips', () => {
@@ -237,7 +263,14 @@ describe('transaction state machine (§6.1, §9.2)', () => {
 
 describe('retry eligibility (§9.3 — no blind retries)', () => {
   it('never retries an ambiguous or unsettled transaction', () => {
-    for (const s of ['PENDING', 'SUBMITTED', 'AWAITING_CALLBACK', 'PROCESSING', 'TIMEOUT', 'RECONCILING'] as TxnState[]) {
+    for (const s of [
+      'PENDING',
+      'SUBMITTED',
+      'AWAITING_CALLBACK',
+      'PROCESSING',
+      'TIMEOUT',
+      'RECONCILING',
+    ] as TxnState[]) {
       expect(isRetryEligible(s, '1')).toBe(false);
     }
   });

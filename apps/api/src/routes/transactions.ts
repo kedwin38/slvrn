@@ -49,7 +49,18 @@ import type { AppContext, ReconciliationQueueMessage } from '../env.js';
 
 export const transactionRoutes = new Hono<AppContext>();
 
+/**
+ * Exports get their own router.
+ *
+ * Mounting one router at both `/payments` and `/exports` made `/exports/transactions/failed`
+ * match the transaction *detail* route with an id of `"failed"` — the export endpoint was
+ * unreachable and the detail handler returned a 500 on the non-UUID id. Found by the
+ * HTTP-level route tests, which is precisely what they are for.
+ */
+export const exportRoutes = new Hono<AppContext>();
+
 transactionRoutes.use('*', requireAuth);
+exportRoutes.use('*', requireAuth);
 
 /** Parse the explorer query from the URL, coercing the numeric and repeated fields. */
 function parseExplorerQuery(url: URL) {
@@ -65,8 +76,12 @@ function parseExplorerQuery(url: URL) {
     ...(params.get('dateFrom') ? { dateFrom: params.get('dateFrom') } : {}),
     ...(params.get('dateTo') ? { dateTo: params.get('dateTo') } : {}),
     ...(params.get('failureCode') ? { failureCode: params.get('failureCode') } : {}),
-    ...(params.get('amountMinCents') ? { amountMinCents: Number(params.get('amountMinCents')) } : {}),
-    ...(params.get('amountMaxCents') ? { amountMaxCents: Number(params.get('amountMaxCents')) } : {}),
+    ...(params.get('amountMinCents')
+      ? { amountMinCents: Number(params.get('amountMinCents')) }
+      : {}),
+    ...(params.get('amountMaxCents')
+      ? { amountMaxCents: Number(params.get('amountMaxCents')) }
+      : {}),
     ...(params.get('sort') ? { sort: params.get('sort') } : {}),
     ...(params.get('direction') ? { direction: params.get('direction') } : {}),
     ...(params.get('page') ? { page: Number(params.get('page')) } : {}),
@@ -157,7 +172,12 @@ async function queryExplorer(
       JOIN recipients r            ON r.id = pi.recipient_id
       LEFT JOIN departments d      ON d.id = pi.department_id
      WHERE t.organization_id = $1
-       AND ($2::text[] IS NULL OR t.status = ANY($2::text[]))
+       -- Statuses arrive as a comma-separated list rather than an array parameter. The
+       -- connection disables the driver type-fetch round trip for latency, which also
+       -- disables its array-OID inference, so a JS array binds as a bare comma-joined
+       -- string that PostgreSQL rejects as a malformed array literal. The values come from
+       -- a closed zod enum and cannot contain a comma, so splitting server-side is exact.
+       AND ($2::text IS NULL OR t.status = ANY(string_to_array($2::text, ',')))
        AND ($3::uuid   IS NULL OR t.batch_id = $3::uuid)
        AND ($4::uuid   IS NULL OR pi.department_id = $4::uuid)
        AND ($5::uuid   IS NULL OR pi.recipient_id = $5::uuid)
@@ -177,7 +197,7 @@ async function queryExplorer(
     `,
     [
       organizationId,
-      query.status ?? null,
+      query.status && query.status.length > 0 ? query.status.join(',') : null,
       query.batchId ?? null,
       query.departmentId ?? null,
       query.recipientId ?? null,
@@ -260,9 +280,16 @@ transactionRoutes.get('/transactions', requirePermissions('transactions:read'), 
 });
 
 /** GET /payments/transactions/:id — the payment detail page (spec 21). */
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 transactionRoutes.get('/transactions/:id', requirePermissions('transactions:read'), async (c) => {
   const actor = actorOf(c);
   const transactionId = c.req.param('id');
+  // Validated before it reaches a query: a malformed id is a 404, not a 500 from the
+  // driver rejecting the cast.
+  if (!UUID_PATTERN.test(transactionId)) {
+    throw notFoundError('TRANSACTION_NOT_FOUND', 'That transaction could not be found');
+  }
 
   const result = await withConnection(c.env, c.executionCtx, async (sql) => {
     const rows = await sql<ExplorerDbRow[]>`
@@ -300,7 +327,14 @@ transactionRoutes.get('/transactions/:id', requirePermissions('transactions:read
     `;
 
     const reconciliation = await sql<
-      { case_reference: string; state: string; opened_reason: string; discrepancy: boolean; query_attempts: number; evidence: unknown }[]
+      {
+        case_reference: string;
+        state: string;
+        opened_reason: string;
+        discrepancy: boolean;
+        query_attempts: number;
+        evidence: unknown;
+      }[]
     >`
       SELECT case_reference, state, opened_reason, discrepancy, query_attempts, evidence
         FROM reconciliation_cases
@@ -350,8 +384,8 @@ transactionRoutes.get('/transactions/:id', requirePermissions('transactions:read
  * ledger rows, preserves provider identifiers, is role-scoped by policy, and writes an
  * audit event carrying the actor, the filter and the row count.
  */
-transactionRoutes.get(
-  '/exports/transactions/failed',
+exportRoutes.get(
+  '/transactions/failed',
   requirePermissions('transactions:export_failed'),
   async (c) => {
     const actor = actorOf(c);
@@ -406,7 +440,11 @@ transactionRoutes.get(
       const overrides = await loadFailureOverrides(sql, actor.organizationId);
 
       const exportRows: TransactionExportRow[] = rows.map((row) => {
-        const resolved = resolveFailure(row.failure_code, row.provider_result_description, overrides);
+        const resolved = resolveFailure(
+          row.failure_code,
+          row.provider_result_description,
+          overrides,
+        );
         return {
           batchReference: row.batch_reference,
           batchId: row.batch_id,
@@ -448,7 +486,7 @@ transactionRoutes.get(
             status, completed_at, correlation_id
           ) VALUES (
             ${actor.organizationId}, ${exportReference}, 'FAILED_TRANSACTIONS', ${actor.userId},
-            ${actor.level}, ${filter.text}, ${tx.json(query as never)}, ${exportRows.length},
+            ${actor.level}, ${filter.text}, ${tx.json(query)}, ${exportRows.length},
             ${body.length}, 'COMPLETED', now(), ${correlationId}
           )
         `;
@@ -506,6 +544,10 @@ transactionRoutes.post(
     const actor = actorOf(c);
     const transactionId = c.req.param('id');
     const correlationId = c.get('correlationId');
+
+    if (!UUID_PATTERN.test(transactionId)) {
+      throw notFoundError('TRANSACTION_NOT_FOUND', 'That transaction could not be found');
+    }
 
     await withConnection(c.env, c.executionCtx, async (sql) => {
       const rows = await sql<{ id: string; status: TxnState }[]>`
@@ -565,6 +607,9 @@ transactionRoutes.post(
 transactionRoutes.get('/batches/:id/rollup', requirePermissions('transactions:read'), async (c) => {
   const actor = actorOf(c);
   const batchId = c.req.param('id');
+  if (!UUID_PATTERN.test(batchId)) {
+    throw notFoundError('BATCH_NOT_FOUND', 'That batch could not be found');
+  }
 
   const rollup = await withConnection(c.env, c.executionCtx, async (sql) => {
     const rows = await sql<
@@ -610,11 +655,21 @@ transactionRoutes.get('/batches/:id/rollup', requirePermissions('transactions:re
 /** GET /payments/failure-summary — failures grouped by reason, for the triage view. */
 transactionRoutes.get('/failure-summary', requirePermissions('transactions:read'), async (c) => {
   const actor = actorOf(c);
-  const batchId = z.string().uuid().optional().parse(new URL(c.req.url).searchParams.get('batchId') ?? undefined);
+  const batchId = z
+    .string()
+    .uuid()
+    .optional()
+    .parse(new URL(c.req.url).searchParams.get('batchId') ?? undefined);
 
   const summary = await withConnection(c.env, c.executionCtx, async (sql) => {
     const rows = await sql<
-      { failure_code: string; failure_reason: string; failure_class: string; count: string; total_cents: string }[]
+      {
+        failure_code: string;
+        failure_reason: string;
+        failure_class: string;
+        count: string;
+        total_cents: string;
+      }[]
     >`
       SELECT t.failure_code, t.failure_reason, t.failure_class,
              COUNT(*) AS count, SUM(pi.amount_cents) AS total_cents

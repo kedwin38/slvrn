@@ -91,9 +91,15 @@ export function decideOnExistingClaim(record: IdempotencyRecord | null): ClaimDe
           'A request was already sent to M-PESA for this instruction and the outcome is unknown. Querying transaction status before any further action.',
       };
     case 'SETTLED':
-      return { action: 'SKIP_ALREADY_SETTLED', reason: 'This instruction already has a settled provider outcome' };
+      return {
+        action: 'SKIP_ALREADY_SETTLED',
+        reason: 'This instruction already has a settled provider outcome',
+      };
     case 'ABANDONED':
-      return { action: 'SUBMIT', reason: 'The previous attempt was abandoned before reaching M-PESA' };
+      return {
+        action: 'SUBMIT',
+        reason: 'The previous attempt was abandoned before reaching M-PESA',
+      };
   }
 }
 

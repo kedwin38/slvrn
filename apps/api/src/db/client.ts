@@ -18,7 +18,13 @@ import postgres from 'postgres';
 import { internalError } from '@solvaren/core';
 import type { Env } from '../env.js';
 
-export type Sql = postgres.Sql<{}>;
+/**
+ * A postgres.js client with no custom type extensions.
+ *
+ * `Record<string, never>` rather than `{}`: the empty-object type accepts any non-nullish
+ * value, so it would silently permit a mis-parameterised client.
+ */
+export type Sql = postgres.Sql<Record<string, never>>;
 
 /**
  * Open a connection for the lifetime of one request or queue batch.

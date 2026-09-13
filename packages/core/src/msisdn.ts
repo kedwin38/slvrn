@@ -34,7 +34,8 @@ export function tryNormalizeMsisdn(input: string): MsisdnParseResult {
   // 0712345678 -> 254712345678
   if (digits.length === 10 && digits.startsWith('0')) digits = `254${digits.slice(1)}`;
   // 712345678 -> 254712345678
-  else if (digits.length === 9 && (digits.startsWith('7') || digits.startsWith('1'))) digits = `254${digits}`;
+  else if (digits.length === 9 && (digits.startsWith('7') || digits.startsWith('1')))
+    digits = `254${digits}`;
   // 00254712345678 -> 254712345678
   else if (digits.startsWith('00254')) digits = digits.slice(2);
 

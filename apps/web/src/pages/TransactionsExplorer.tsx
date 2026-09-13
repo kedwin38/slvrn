@@ -117,11 +117,15 @@ export function TransactionsExplorer({ capabilities, initialStatuses, initialBat
       setData(await api.transactions.list(params, controller.signal));
     } catch (err) {
       if (controller.signal.aborted) return;
-      setError(err instanceof ApiError ? err : new ApiError(0, {
-        code: 'NETWORK',
-        category: 'INTERNAL',
-        message: 'Could not reach SOLVAREN. Check your connection and try again.',
-      }));
+      setError(
+        err instanceof ApiError
+          ? err
+          : new ApiError(0, {
+              code: 'NETWORK',
+              category: 'INTERNAL',
+              message: 'Could not reach SOLVAREN. Check your connection and try again.',
+            }),
+      );
     } finally {
       if (!controller.signal.aborted) setLoading(false);
     }
@@ -341,31 +345,38 @@ export function TransactionsExplorer({ capabilities, initialStatuses, initialBat
             <div className="table-scroll">
               <table className="table">
                 <caption className="visually-hidden">
-                  Transactions, sorted by {COLUMN_LABELS[sort]} {direction === 'asc' ? 'ascending' : 'descending'}
+                  Transactions, sorted by {COLUMN_LABELS[sort]}{' '}
+                  {direction === 'asc' ? 'ascending' : 'descending'}
                 </caption>
                 <thead>
                   <tr>
-                    {(['recipient', 'batch', 'amount', 'status', 'date'] as SortColumn[]).map((column) => (
-                      <th
-                        key={column}
-                        scope="col"
-                        className={column === 'amount' ? 'numeric' : undefined}
-                        aria-sort={
-                          sort === column ? (direction === 'asc' ? 'ascending' : 'descending') : 'none'
-                        }
-                      >
-                        <button
-                          className="sort-button"
-                          data-active={sort === column}
-                          onClick={() => applySort(column)}
+                    {(['recipient', 'batch', 'amount', 'status', 'date'] as SortColumn[]).map(
+                      (column) => (
+                        <th
+                          key={column}
+                          scope="col"
+                          className={column === 'amount' ? 'numeric' : undefined}
+                          aria-sort={
+                            sort === column
+                              ? direction === 'asc'
+                                ? 'ascending'
+                                : 'descending'
+                              : 'none'
+                          }
                         >
-                          {COLUMN_LABELS[column]}
-                          <span className="sort-indicator" aria-hidden="true">
-                            {sort === column ? (direction === 'asc' ? '↑' : '↓') : '↕'}
-                          </span>
-                        </button>
-                      </th>
-                    ))}
+                          <button
+                            className="sort-button"
+                            data-active={sort === column}
+                            onClick={() => applySort(column)}
+                          >
+                            {COLUMN_LABELS[column]}
+                            <span className="sort-indicator" aria-hidden="true">
+                              {sort === column ? (direction === 'asc' ? '↑' : '↓') : '↕'}
+                            </span>
+                          </button>
+                        </th>
+                      ),
+                    )}
                     <th scope="col">Receipt</th>
                     <th scope="col">
                       <span className="visually-hidden">Actions</span>
@@ -379,7 +390,9 @@ export function TransactionsExplorer({ capabilities, initialStatuses, initialBat
                       row={row}
                       expanded={expanded === row.transactionId}
                       onToggle={() =>
-                        setExpanded((current) => (current === row.transactionId ? null : row.transactionId))
+                        setExpanded((current) =>
+                          current === row.transactionId ? null : row.transactionId,
+                        )
                       }
                       canRefresh={canRefresh}
                       onRefreshed={load}
@@ -392,7 +405,8 @@ export function TransactionsExplorer({ capabilities, initialStatuses, initialBat
             {data && (
               <div className="pagination">
                 <span className="pagination-summary">
-                  Page {data.page.page} of {data.page.totalPages} · {data.page.totalRows.toLocaleString('en-KE')} rows
+                  Page {data.page.page} of {data.page.totalPages} ·{' '}
+                  {data.page.totalRows.toLocaleString('en-KE')} rows
                 </span>
                 <div className="row">
                   <button
@@ -451,7 +465,9 @@ function TransactionRowView({
       setRefreshMessage(result.message);
       onRefreshed();
     } catch (err) {
-      setRefreshMessage(err instanceof ApiError ? err.message : 'The refresh could not be requested.');
+      setRefreshMessage(
+        err instanceof ApiError ? err.message : 'The refresh could not be requested.',
+      );
     } finally {
       setRefreshing(false);
     }
@@ -532,7 +548,10 @@ function TransactionRowView({
                 <div>
                   <dt>Originator&nbsp;</dt>
                   <dd>
-                    <Reference value={row.originatorConversationId} label="originator conversation id" />
+                    <Reference
+                      value={row.originatorConversationId}
+                      label="originator conversation id"
+                    />
                   </dd>
                 </div>
                 <div>

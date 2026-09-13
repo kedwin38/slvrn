@@ -13,13 +13,15 @@
 
 import { useEffect, useState } from 'react';
 import { formatCents, maskMsisdn } from '@solvaren/core';
+import { api, ApiError, type BalancePanel, type OperationalDashboard } from '../lib/api.js';
 import {
-  api,
-  ApiError,
-  type BalancePanel,
-  type OperationalDashboard,
-} from '../lib/api.js';
-import { Amount, Stat, Notice, EmptyState, RelativeTime, StatusChip } from '../components/primitives.js';
+  Amount,
+  Stat,
+  Notice,
+  EmptyState,
+  RelativeTime,
+  StatusChip,
+} from '../components/primitives.js';
 import type { TxnState } from '@solvaren/core';
 
 interface Props {
@@ -37,12 +39,13 @@ export function Dashboard({ capabilities, level, fullName, onDrillDown }: Props)
 
   useEffect(() => {
     let cancelled = false;
-    (async () => {
+    void (async () => {
       try {
         const data = await api.analytics.operational();
         if (!cancelled) setOperational(data);
       } catch (err) {
-        if (!cancelled) setError(err instanceof ApiError ? err.message : 'Could not load the dashboard.');
+        if (!cancelled)
+          setError(err instanceof ApiError ? err.message : 'Could not load the dashboard.');
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -109,7 +112,8 @@ export function Dashboard({ capabilities, level, fullName, onDrillDown }: Props)
           label="Paid (30 days)"
           value={loading ? '—' : (operational?.transactions.success ?? 0).toLocaleString('en-KE')}
           detail={
-            operational?.transactions.successRate !== null && operational?.transactions.successRate !== undefined
+            operational?.transactions.successRate !== null &&
+            operational?.transactions.successRate !== undefined
               ? `${(operational.transactions.successRate * 100).toFixed(1)}% success rate`
               : 'No transactions yet'
           }
@@ -156,7 +160,10 @@ export function Dashboard({ capabilities, level, fullName, onDrillDown }: Props)
             <span className="small muted">Last 30 days</span>
           </div>
           <div className="card-body">
-            <FailureTrend data={operational.dailyTrend} onDrillDown={() => onDrillDown(['FAILED'])} />
+            <FailureTrend
+              data={operational.dailyTrend}
+              onDrillDown={() => onDrillDown(['FAILED'])}
+            />
           </div>
         </div>
       )}
@@ -254,9 +261,10 @@ function BalancePanelView() {
              * is common enough to be worth a standing note.
              */}
             {utility && (
-              <Notice tone="info" >
+              <Notice tone="info">
                 B2C disbursements debit the <strong>Utility</strong> account. Funds in Working (MMF)
-                must be moved to Utility on the M-PESA organisation portal before they can be paid out.
+                must be moved to Utility on the M-PESA organisation portal before they can be paid
+                out.
               </Notice>
             )}
 
@@ -290,7 +298,7 @@ function RecentTransactionsPanel() {
 
   useEffect(() => {
     let cancelled = false;
-    (async () => {
+    void (async () => {
       try {
         const result = await api.analytics.recentTransactions();
         if (!cancelled) setRows(result.transactions);
@@ -436,9 +444,11 @@ function FailureTrend({
 function greeting(): string {
   // Nairobi time, since that is where the finance team is.
   const hour = Number(
-    new Intl.DateTimeFormat('en-KE', { hour: 'numeric', hour12: false, timeZone: 'Africa/Nairobi' }).format(
-      new Date(),
-    ),
+    new Intl.DateTimeFormat('en-KE', {
+      hour: 'numeric',
+      hour12: false,
+      timeZone: 'Africa/Nairobi',
+    }).format(new Date()),
   );
   if (hour < 12) return 'Good morning';
   if (hour < 17) return 'Good afternoon';

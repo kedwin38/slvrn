@@ -179,7 +179,7 @@ export async function executeInstruction(
     providerCode === '500.002.1001' || // duplicate originator id — the first one may have paid
     providerCode === '500.003.1001' ||
     providerCode === '500.001.1001' ||
-    (typeof error.details?.httpStatus === 'number' && (error.details.httpStatus as number) >= 500);
+    (typeof error.details?.httpStatus === 'number' && error.details.httpStatus >= 500);
 
   if (ambiguous) {
     await markForReconciliation(
@@ -449,7 +449,9 @@ async function prepareSubmission(
       Remarks: prepared.instruction.remarks.slice(0, 100),
       QueueTimeOutURL: config.queueTimeoutUrl,
       ResultURL: config.resultUrl,
-      ...(prepared.instruction.occasion ? { Occassion: prepared.instruction.occasion.slice(0, 100) } : {}),
+      ...(prepared.instruction.occasion
+        ? { Occassion: prepared.instruction.occasion.slice(0, 100) }
+        : {}),
     },
   };
 }
@@ -560,7 +562,14 @@ export async function maybeSettleBatch(
     await requireLock(tx, 'batch', batchId);
 
     const rows = await tx<
-      { state: string; total: string; success: string; failed: string; timeout: string; in_flight: string }[]
+      {
+        state: string;
+        total: string;
+        success: string;
+        failed: string;
+        timeout: string;
+        in_flight: string;
+      }[]
     >`
       SELECT b.state,
              COUNT(t.id) AS total,
@@ -592,7 +601,13 @@ export async function maybeSettleBatch(
 
     // Anything unresolved keeps the batch in TIMEOUT, where the operator can see it.
     const nextState =
-      timeout > 0 ? 'TIMEOUT' : failed === 0 ? 'SUCCESS' : success === 0 ? 'FAILED' : 'PARTIAL_SUCCESS';
+      timeout > 0
+        ? 'TIMEOUT'
+        : failed === 0
+          ? 'SUCCESS'
+          : success === 0
+            ? 'FAILED'
+            : 'PARTIAL_SUCCESS';
 
     await tx`
       UPDATE payment_batches SET state = ${nextState}, settled_at = now()

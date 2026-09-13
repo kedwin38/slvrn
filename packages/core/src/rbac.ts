@@ -198,7 +198,10 @@ export interface Actor {
 }
 
 /** Pure predicate — no throwing, safe for UI capability payloads. */
-export function hasPermission(actor: Pick<Actor, 'level' | 'status'>, permission: Permission): boolean {
+export function hasPermission(
+  actor: Pick<Actor, 'level' | 'status'>,
+  permission: Permission,
+): boolean {
   if (actor.status !== 'ACTIVE') return false;
   return MATRIX[actor.level].has(permission);
 }
@@ -211,10 +214,14 @@ export function requirePermission(actor: Actor, permission: Permission): void {
     });
   }
   if (!MATRIX[actor.level].has(permission)) {
-    throw authorizationError('PERMISSION_DENIED', `Authority level ${actor.level} may not perform this action`, {
-      permission,
-      level: actor.level,
-    });
+    throw authorizationError(
+      'PERMISSION_DENIED',
+      `Authority level ${actor.level} may not perform this action`,
+      {
+        permission,
+        level: actor.level,
+      },
+    );
   }
 }
 
@@ -242,7 +249,9 @@ export function canExportFailedTransactions(
 }
 
 /** The capability payload sent to the browser, so the UI can render honestly. */
-export function capabilitiesFor(actor: Pick<Actor, 'level' | 'status'>): Record<Permission, boolean> {
+export function capabilitiesFor(
+  actor: Pick<Actor, 'level' | 'status'>,
+): Record<Permission, boolean> {
   const out = {} as Record<Permission, boolean>;
   for (const p of PERMISSIONS) out[p] = hasPermission(actor, p);
   return out;

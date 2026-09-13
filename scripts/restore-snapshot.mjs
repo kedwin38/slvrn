@@ -90,7 +90,6 @@ const TRIGGERS_TO_SUSPEND = [
   ['export_records', 'export_records_no_delete'],
 ];
 
-
 /**
  * Credential placeholders for restored users.
  *
@@ -124,7 +123,6 @@ function withRestoredCredentials(table, row) {
     status: 'PENDING_ENROLMENT',
   };
 }
-
 
 /**
  * Column type map for a table.

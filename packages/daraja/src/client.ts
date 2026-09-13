@@ -70,7 +70,8 @@ const TOKEN_REFRESH_RATIO = 0.8;
 
 export class DarajaClient {
   private readonly host: string;
-  private readonly options: Required<Pick<DarajaClientOptions, 'environment' | 'credentials'>> & DarajaClientOptions;
+  private readonly options: Required<Pick<DarajaClientOptions, 'environment' | 'credentials'>> &
+    DarajaClientOptions;
   private readonly fetchImpl: typeof fetch;
   private readonly timeoutMs: number;
   private readonly now: () => number;
@@ -119,14 +120,18 @@ export class DarajaClient {
     try {
       parsed = JSON.parse(bodyText);
     } catch {
-      throw providerError('DARAJA_TOKEN_MALFORMED', 'M-PESA returned a token response that could not be parsed');
+      throw providerError(
+        'DARAJA_TOKEN_MALFORMED',
+        'M-PESA returned a token response that could not be parsed',
+      );
     }
     if (!parsed.access_token) {
       throw providerError('DARAJA_TOKEN_MISSING', 'M-PESA did not return an access token');
     }
 
     const lifetimeSeconds = Number(parsed.expires_in ?? 3599);
-    const safeLifetime = Number.isFinite(lifetimeSeconds) && lifetimeSeconds > 0 ? lifetimeSeconds : 3599;
+    const safeLifetime =
+      Number.isFinite(lifetimeSeconds) && lifetimeSeconds > 0 ? lifetimeSeconds : 3599;
     this.token = {
       accessToken: parsed.access_token,
       expiresAtMs: this.now() + safeLifetime * TOKEN_REFRESH_RATIO * 1000,
@@ -160,12 +165,16 @@ export class DarajaClient {
 
   /** Read-only status query. Safe to retry because it mutates nothing. */
   async queryTransactionStatus(request: TransactionStatusRequest): Promise<DarajaAck> {
-    return this.postJson(DARAJA_PATHS.transactionStatus, request, 'transaction_status', { allowRetry: true });
+    return this.postJson(DARAJA_PATHS.transactionStatus, request, 'transaction_status', {
+      allowRetry: true,
+    });
   }
 
   /** Read-only balance query (§21 executive balance panel). */
   async queryAccountBalance(request: AccountBalanceRequest): Promise<DarajaAck> {
-    return this.postJson(DARAJA_PATHS.accountBalance, request, 'account_balance', { allowRetry: true });
+    return this.postJson(DARAJA_PATHS.accountBalance, request, 'account_balance', {
+      allowRetry: true,
+    });
   }
 
   /**
@@ -227,7 +236,10 @@ export class DarajaClient {
       try {
         parsed = JSON.parse(text);
       } catch {
-        throw providerError('DARAJA_RESPONSE_MALFORMED', `M-PESA returned an unparseable response from ${endpoint}`);
+        throw providerError(
+          'DARAJA_RESPONSE_MALFORMED',
+          `M-PESA returned an unparseable response from ${endpoint}`,
+        );
       }
 
       const ack = ackSchema.safeParse(parsed);
@@ -241,13 +253,17 @@ export class DarajaClient {
             { errorCode: gateway.data.errorCode, requestId: gateway.data.requestId, endpoint },
           );
         }
-        throw providerError('DARAJA_RESPONSE_UNEXPECTED', `M-PESA returned an unexpected response from ${endpoint}`);
+        throw providerError(
+          'DARAJA_RESPONSE_UNEXPECTED',
+          `M-PESA returned an unexpected response from ${endpoint}`,
+        );
       }
 
       if (ack.data.ResponseCode !== '0') {
         throw providerError(
           'DARAJA_REQUEST_REJECTED',
-          ack.data.ResponseDescription ?? `M-PESA rejected the request with code ${ack.data.ResponseCode}`,
+          ack.data.ResponseDescription ??
+            `M-PESA rejected the request with code ${ack.data.ResponseCode}`,
           { responseCode: ack.data.ResponseCode, endpoint },
         );
       }

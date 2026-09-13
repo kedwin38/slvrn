@@ -39,7 +39,11 @@ const participants = (o: Partial<BatchParticipants> = {}): BatchParticipants => 
 describe('separation of duties (§19, §23)', () => {
   it('blocks the creator from approving their own batch', () => {
     expect(() =>
-      assertNotSelfApproval({ actorUserId: 'user-l1', actorLevel: 'L2', participants: participants() }),
+      assertNotSelfApproval({
+        actorUserId: 'user-l1',
+        actorLevel: 'L2',
+        participants: participants(),
+      }),
     ).toThrow(/created this batch and may not approve it/);
   });
 
@@ -55,7 +59,11 @@ describe('separation of duties (§19, §23)', () => {
 
   it('allows a genuinely independent approver', () => {
     expect(() =>
-      assertNotSelfApproval({ actorUserId: 'user-l2b', actorLevel: 'L2', participants: participants() }),
+      assertNotSelfApproval({
+        actorUserId: 'user-l2b',
+        actorLevel: 'L2',
+        participants: participants(),
+      }),
     ).not.toThrow();
   });
 
@@ -71,7 +79,11 @@ describe('separation of duties (§19, §23)', () => {
 
   it('blocks the creator and any modifier from final authorization', () => {
     expect(() =>
-      assertNotSelfAuthorization({ actorUserId: 'user-l1', actorLevel: 'L3', participants: participants() }),
+      assertNotSelfAuthorization({
+        actorUserId: 'user-l1',
+        actorLevel: 'L3',
+        participants: participants(),
+      }),
     ).toThrow(/created this batch/);
     expect(() =>
       assertNotSelfAuthorization({
@@ -108,18 +120,29 @@ describe('cooling-off window', () => {
   });
 
   it('permits submission once the window has elapsed', () => {
-    expect(() => assertCoolingOff({ lastMaterialEditAt: now - 301_000, now, coolingOffSeconds: 300 })).not.toThrow();
+    expect(() =>
+      assertCoolingOff({ lastMaterialEditAt: now - 301_000, now, coolingOffSeconds: 300 }),
+    ).not.toThrow();
   });
 
   it('is disabled by a zero window or an unedited batch', () => {
-    expect(() => assertCoolingOff({ lastMaterialEditAt: now, now, coolingOffSeconds: 0 })).not.toThrow();
-    expect(() => assertCoolingOff({ lastMaterialEditAt: null, now, coolingOffSeconds: 300 })).not.toThrow();
+    expect(() =>
+      assertCoolingOff({ lastMaterialEditAt: now, now, coolingOffSeconds: 0 }),
+    ).not.toThrow();
+    expect(() =>
+      assertCoolingOff({ lastMaterialEditAt: null, now, coolingOffSeconds: 300 }),
+    ).not.toThrow();
   });
 });
 
 describe('conflict of interest registry', () => {
   const conflicts = [
-    { userId: 'user-l3', scopeType: 'DEPARTMENT' as const, scopeId: 'dept-eng', reason: 'Spouse employed in Engineering' },
+    {
+      userId: 'user-l3',
+      scopeType: 'DEPARTMENT' as const,
+      scopeId: 'dept-eng',
+      reason: 'Spouse employed in Engineering',
+    },
   ];
 
   it('blocks an approver conflicted for a department in the batch', () => {
@@ -148,7 +171,9 @@ describe('conflict of interest registry', () => {
     expect(() =>
       assertNoDeclaredConflict({
         actorUserId: 'u',
-        conflicts: [{ userId: 'u', scopeType: 'ORGANIZATION', scopeId: null, reason: 'Under investigation' }],
+        conflicts: [
+          { userId: 'u', scopeType: 'ORGANIZATION', scopeId: null, reason: 'Under investigation' },
+        ],
         recipientIds: [],
         departmentIds: [],
       }),
@@ -170,7 +195,11 @@ describe('collusion signal', () => {
   });
 
   it('stays silent on a small sample, where concentration means nothing', () => {
-    const pairs = Array.from({ length: 4 }, (_, i) => ({ approverUserId: 'a', authorizerUserId: 'c', at: i }));
+    const pairs = Array.from({ length: 4 }, (_, i) => ({
+      approverUserId: 'a',
+      authorizerUserId: 'c',
+      at: i,
+    }));
     expect(detectApprovalChainConcentration({ recentPairs: pairs })).toEqual([]);
   });
 });
@@ -321,7 +350,11 @@ describe('secret redaction (NFR-SEC-003)', () => {
   });
 
   it('leaves non-secret payment data intact so audit remains useful', () => {
-    const redacted = redactForAudit({ amountCents: 45_000_00, msisdn: '2547****5678', batchId: 'b1' }) as any;
+    const redacted = redactForAudit({
+      amountCents: 45_000_00,
+      msisdn: '2547****5678',
+      batchId: 'b1',
+    }) as any;
     expect(redacted.amountCents).toBe(45_000_00);
     expect(redacted.batchId).toBe('b1');
   });
@@ -362,7 +395,9 @@ describe('idempotency (§9.3, NFR-REL-003)', () => {
     ['manifest', { manifestHash: 'B'.repeat(64) }],
     ['instruction', { instructionId: 'ins-2' }],
   ])('changes when the %s changes', async (_label, patch) => {
-    expect(await instructionFingerprint({ ...base, ...patch })).not.toBe(await instructionFingerprint(base));
+    expect(await instructionFingerprint({ ...base, ...patch })).not.toBe(
+      await instructionFingerprint(base),
+    );
   });
 
   it('submits when there is no prior claim', () => {
@@ -453,7 +488,11 @@ describe('release policy engine', () => {
     );
     expect(result.allowed).toBe(false);
     expect(result.violations.map((v) => v.code)).toEqual(
-      expect.arrayContaining(['POLICY_BATCH_SIZE', 'POLICY_INSTRUCTION_LIMIT', 'POLICY_BATCH_TOTAL']),
+      expect.arrayContaining([
+        'POLICY_BATCH_SIZE',
+        'POLICY_INSTRUCTION_LIMIT',
+        'POLICY_BATCH_TOTAL',
+      ]),
     );
   });
 
@@ -473,12 +512,16 @@ describe('release policy engine', () => {
     expect(blocked.allowed).toBe(false);
     expect(blocked.violations[0]!.code).toBe('POLICY_RISK_BLOCK');
 
-    const dispositioned = evaluateReleasePolicy(input({ risk: critical, dispositionedFindingCount: 2 }));
+    const dispositioned = evaluateReleasePolicy(
+      input({ risk: critical, dispositionedFindingCount: 2 }),
+    );
     expect(dispositioned.allowed).toBe(true);
   });
 
   it('requires explicit acknowledgement for high-value releases (NFR-UX-001)', () => {
     const result = evaluateReleasePolicy(input({ totalAmountCents: 8_420_500_00 }));
-    expect(result.acknowledgementsRequired.join(' ')).toMatch(/high-value release of KES 8,420,500.00/);
+    expect(result.acknowledgementsRequired.join(' ')).toMatch(
+      /high-value release of KES 8,420,500.00/,
+    );
   });
 });

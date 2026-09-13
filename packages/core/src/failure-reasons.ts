@@ -99,7 +99,13 @@ export const FAILURE_REASONS: Readonly<Record<string, FailureReason>> = Object.f
     'Do not resend. Run a status query on the original OriginatorConversationID to establish the true outcome',
     false,
   ),
-  '17': D('17', 'M-PESA internal failure', 'PROVIDER', 'Reconcile before any retry; escalate to Safaricom if it repeats', true),
+  '17': D(
+    '17',
+    'M-PESA internal failure',
+    'PROVIDER',
+    'Reconcile before any retry; escalate to Safaricom if it repeats',
+    true,
+  ),
   '18': D(
     '18',
     'Initiator credential check failed (wrong password or an encryption/decryption problem)',
@@ -107,7 +113,13 @@ export const FAILURE_REASONS: Readonly<Record<string, FailureReason>> = Object.f
     'Level 3: regenerate the SecurityCredential against the current M-PESA public certificate and rotate the stored credential',
     false,
   ),
-  '19': D('19', 'Message sequencing failure at M-PESA', 'PROVIDER', 'Reconcile the transaction; escalate if it repeats', true),
+  '19': D(
+    '19',
+    'Message sequencing failure at M-PESA',
+    'PROVIDER',
+    'Reconcile the transaction; escalate if it repeats',
+    true,
+  ),
   '20': D(
     '20',
     'Unresolved initiator — the API username was not found on the M-PESA portal',
@@ -129,8 +141,20 @@ export const FAILURE_REASONS: Readonly<Record<string, FailureReason>> = Object.f
     'Level 3: check the API operator is active and permitted for the receiving party',
     false,
   ),
-  '24': D('24', 'M-PESA rejected the request for missing mandatory fields', 'REQUEST', 'Raise an engineering incident — the submitted payload is incomplete', false),
-  '25': D('25', 'M-PESA could not convert one of the request parameters', 'REQUEST', 'Raise an engineering incident — a field is the wrong type', false),
+  '24': D(
+    '24',
+    'M-PESA rejected the request for missing mandatory fields',
+    'REQUEST',
+    'Raise an engineering incident — the submitted payload is incomplete',
+    false,
+  ),
+  '25': D(
+    '25',
+    'M-PESA could not convert one of the request parameters',
+    'REQUEST',
+    'Raise an engineering incident — a field is the wrong type',
+    false,
+  ),
   '26': D(
     '26',
     'M-PESA is applying traffic blocking (system too busy)',
@@ -138,7 +162,13 @@ export const FAILURE_REASONS: Readonly<Record<string, FailureReason>> = Object.f
     'The reconciliation sweep will re-check; throughput is throttled automatically',
     true,
   ),
-  '29': D('29', 'M-PESA rejected the command as invalid', 'REQUEST', 'Raise an engineering incident — the CommandID is not valid for this shortcode', false),
+  '29': D(
+    '29',
+    'M-PESA rejected the command as invalid',
+    'REQUEST',
+    'Raise an engineering incident — the CommandID is not valid for this shortcode',
+    false,
+  ),
   '2001': D(
     '2001',
     'The initiator information is invalid (username, password, encryption or certificate)',
@@ -183,14 +213,62 @@ export const FAILURE_REASONS: Readonly<Record<string, FailureReason>> = Object.f
   ),
 
   // ---- Gateway / platform error codes ------------------------------------
-  '400.002.02': D('400.002.02', 'Daraja rejected a field in the request as invalid', 'REQUEST', 'Raise an engineering incident with the correlation id', false),
-  '400.002.05': D('400.002.05', 'Daraja rejected the request payload as malformed', 'REQUEST', 'Raise an engineering incident with the correlation id', false),
-  '400.003.01': D('400.003.01', 'The Daraja access token was invalid or expired', 'CREDENTIAL', 'The token cache refreshes automatically; if it persists, Level 3 should re-test the Daraja connection', true),
-  '400.003.02': D('400.003.02', 'Daraja rejected the request as incomplete', 'REQUEST', 'Raise an engineering incident with the correlation id', false),
-  '401.002.01': D('401.002.01', 'The Daraja access token was rejected', 'CREDENTIAL', 'Level 3: verify the consumer key and secret, then re-test the connection', true),
-  '404.001.03': D('404.001.03', 'The Daraja access token was rejected as invalid', 'CREDENTIAL', 'Level 3: verify the consumer key and secret, then re-test the connection', true),
-  '404.001.04': D('404.001.04', 'Daraja rejected the authentication header or HTTP method', 'REQUEST', 'Raise an engineering incident with the correlation id', false),
-  '500.001.1001': D('500.001.1001', 'Daraja internal server error while handling the request', 'PROVIDER', 'Reconcile before any retry — the payment may still have been processed', true),
+  '400.002.02': D(
+    '400.002.02',
+    'Daraja rejected a field in the request as invalid',
+    'REQUEST',
+    'Raise an engineering incident with the correlation id',
+    false,
+  ),
+  '400.002.05': D(
+    '400.002.05',
+    'Daraja rejected the request payload as malformed',
+    'REQUEST',
+    'Raise an engineering incident with the correlation id',
+    false,
+  ),
+  '400.003.01': D(
+    '400.003.01',
+    'The Daraja access token was invalid or expired',
+    'CREDENTIAL',
+    'The token cache refreshes automatically; if it persists, Level 3 should re-test the Daraja connection',
+    true,
+  ),
+  '400.003.02': D(
+    '400.003.02',
+    'Daraja rejected the request as incomplete',
+    'REQUEST',
+    'Raise an engineering incident with the correlation id',
+    false,
+  ),
+  '401.002.01': D(
+    '401.002.01',
+    'The Daraja access token was rejected',
+    'CREDENTIAL',
+    'Level 3: verify the consumer key and secret, then re-test the connection',
+    true,
+  ),
+  '404.001.03': D(
+    '404.001.03',
+    'The Daraja access token was rejected as invalid',
+    'CREDENTIAL',
+    'Level 3: verify the consumer key and secret, then re-test the connection',
+    true,
+  ),
+  '404.001.04': D(
+    '404.001.04',
+    'Daraja rejected the authentication header or HTTP method',
+    'REQUEST',
+    'Raise an engineering incident with the correlation id',
+    false,
+  ),
+  '500.001.1001': D(
+    '500.001.1001',
+    'Daraja internal server error while handling the request',
+    'PROVIDER',
+    'Reconcile before any retry — the payment may still have been processed',
+    true,
+  ),
   '500.002.1001': D(
     '500.002.1001',
     'Duplicate OriginatorConversationID — Daraja has already seen this request identifier',
@@ -198,15 +276,69 @@ export const FAILURE_REASONS: Readonly<Record<string, FailureReason>> = Object.f
     'Do not resend. Query the transaction status for the original identifier to establish whether money moved',
     false,
   ),
-  '500.003.02': D('500.003.02', 'Spike arrest violation — request rate exceeded the permitted burst', 'PROVIDER', 'Throughput is throttled automatically; the sweep will re-check', true),
-  '500.003.03': D('500.003.03', 'Quota violation — the request exceeded the permitted TPS', 'PROVIDER', 'Throughput is throttled automatically; the sweep will re-check', true),
-  '500.003.1001': D('500.003.1001', 'Daraja internal server error', 'PROVIDER', 'Reconcile before any retry', true),
-  '100000001': D('100000001', 'M-PESA reports the system is overloaded', 'PROVIDER', 'The reconciliation sweep will re-check', true),
-  '100000002': D('100000002', 'M-PESA throttling error', 'PROVIDER', 'The reconciliation sweep will re-check', true),
-  '100000004': D('100000004', 'M-PESA internal server error', 'PROVIDER', 'Reconcile before any retry', true),
-  '100000010': D('100000010', 'Insufficient permissions on the M-PESA account', 'PERMISSION', 'Level 3: review the API operator roles on the org portal', false),
-  '100000011': D('100000011', 'M-PESA request rate limit exceeded', 'PROVIDER', 'Throughput is throttled automatically', true),
-  '00.002.1001': D('00.002.1001', 'M-PESA is under maintenance', 'PROVIDER', 'Releases are paused automatically; retry after the maintenance window', true),
+  '500.003.02': D(
+    '500.003.02',
+    'Spike arrest violation — request rate exceeded the permitted burst',
+    'PROVIDER',
+    'Throughput is throttled automatically; the sweep will re-check',
+    true,
+  ),
+  '500.003.03': D(
+    '500.003.03',
+    'Quota violation — the request exceeded the permitted TPS',
+    'PROVIDER',
+    'Throughput is throttled automatically; the sweep will re-check',
+    true,
+  ),
+  '500.003.1001': D(
+    '500.003.1001',
+    'Daraja internal server error',
+    'PROVIDER',
+    'Reconcile before any retry',
+    true,
+  ),
+  '100000001': D(
+    '100000001',
+    'M-PESA reports the system is overloaded',
+    'PROVIDER',
+    'The reconciliation sweep will re-check',
+    true,
+  ),
+  '100000002': D(
+    '100000002',
+    'M-PESA throttling error',
+    'PROVIDER',
+    'The reconciliation sweep will re-check',
+    true,
+  ),
+  '100000004': D(
+    '100000004',
+    'M-PESA internal server error',
+    'PROVIDER',
+    'Reconcile before any retry',
+    true,
+  ),
+  '100000010': D(
+    '100000010',
+    'Insufficient permissions on the M-PESA account',
+    'PERMISSION',
+    'Level 3: review the API operator roles on the org portal',
+    false,
+  ),
+  '100000011': D(
+    '100000011',
+    'M-PESA request rate limit exceeded',
+    'PROVIDER',
+    'Throughput is throttled automatically',
+    true,
+  ),
+  '00.002.1001': D(
+    '00.002.1001',
+    'M-PESA is under maintenance',
+    'PROVIDER',
+    'Releases are paused automatically; retry after the maintenance window',
+    true,
+  ),
 
   // ---- SOLVAREN-internal outcomes ----------------------------------------
   SLV_TIMEOUT: D(
@@ -258,7 +390,9 @@ export interface ResolvedFailure {
 }
 
 /** Database-backed overrides, so administrators can map new codes without a deploy. */
-export type FailureOverrides = Readonly<Record<string, Pick<FailureReason, 'reason' | 'class' | 'operatorAction' | 'transient'>>>;
+export type FailureOverrides = Readonly<
+  Record<string, Pick<FailureReason, 'reason' | 'class' | 'operatorAction' | 'transient'>>
+>;
 
 /**
  * Resolve a provider code to an explanation.

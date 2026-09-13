@@ -21,11 +21,11 @@ before you start the technical work.
 
 **Decide the open questions in specification §28.** Three of them block deployment:
 
-| Decision | Why it blocks |
-|---|---|
-| PostgreSQL host and region | Hyperdrive is configured against a specific connection string |
-| Whether administrative surfaces sit behind Cloudflare Access | Changes the Terraform apply and the operator onboarding |
-| Whether financial data may reach the AI provider | Determines whether `AI_API_KEY` is set at all |
+| Decision                                                     | Why it blocks                                                 |
+| ------------------------------------------------------------ | ------------------------------------------------------------- |
+| PostgreSQL host and region                                   | Hyperdrive is configured against a specific connection string |
+| Whether administrative surfaces sit behind Cloudflare Access | Changes the Terraform apply and the operator onboarding       |
+| Whether financial data may reach the AI provider             | Determines whether `AI_API_KEY` is set at all                 |
 
 The remainder (approval thresholds, cooling-off duration, holiday calendar) are
 organisation policy and can be set through the console after go-live.
@@ -254,7 +254,7 @@ not disaster-recovery proven, and the console says so on the screen. See
 Verified, not assumed:
 
 - [ ] `scripts/db-test.sh` passes all 45 assertions against the production schema
-- [ ] `pnpm check:invariants` passes all 29 checks on the deployed commit
+- [ ] `pnpm check:invariants` passes all 31 checks on the deployed commit
 - [ ] The application database role is not the table owner
 - [ ] `SECRET_ENCRYPTION_KEY` is in key custody
 - [ ] Every L3 account has **two** registered authenticators and an authorization PIN
@@ -286,5 +286,5 @@ the capability the design removes. A schema change that proves wrong is correcte
 migration, not by reversing the old one.
 
 A rollback of the Worker against a newer schema is safe: every migration so far is additive.
-A rollback across a migration that *removed* something would not be, so such a migration
+A rollback across a migration that _removed_ something would not be, so such a migration
 should be split into two releases — stop using the column in one, drop it in the next.

@@ -105,7 +105,13 @@ export async function sweepOrganization(
   }
 
   for (const transaction of stuck) {
-    await queryTransactionStatus(sql, env, message, transaction.id, transaction.originator_conversation_id);
+    await queryTransactionStatus(
+      sql,
+      env,
+      message,
+      transaction.id,
+      transaction.originator_conversation_id,
+    );
   }
 }
 
@@ -129,7 +135,13 @@ export async function reconcileTransaction(
   `;
 
   for (const transaction of rows) {
-    await queryTransactionStatus(sql, env, message, transaction.id, transaction.originator_conversation_id);
+    await queryTransactionStatus(
+      sql,
+      env,
+      message,
+      transaction.id,
+      transaction.originator_conversation_id,
+    );
   }
 }
 
@@ -257,7 +269,7 @@ async function escalate(
       VALUES (
         ${message.organizationId}, 'RECONCILIATION_ESCALATED', 'WARNING',
         ${'A transaction outcome could not be established automatically and needs manual resolution'},
-        ${tx.json({ transactionId, attempts } as never)}
+        ${tx.json({ transactionId, attempts })}
       )
     `;
     await writeAuditEvent(tx, {

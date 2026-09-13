@@ -153,8 +153,16 @@ export function renderFailedTransactionsCsv(
 }
 
 /** Content-Disposition filename. Deterministic and safe for every filesystem. */
-export function exportFilename(prefix: string, organizationSlug: string, generatedAt: string): string {
+export function exportFilename(
+  prefix: string,
+  organizationSlug: string,
+  generatedAt: string,
+): string {
   const stamp = generatedAt.replace(/[:.]/g, '-').replace('T', '_').replace('Z', '');
-  const slug = organizationSlug.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40);
+  const slug = organizationSlug
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '')
+    .slice(0, 40);
   return `${prefix}_${slug || 'organization'}_${stamp}.csv`;
 }

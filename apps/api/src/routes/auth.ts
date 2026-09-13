@@ -85,13 +85,16 @@ authRoutes.post('/login', async (c) => {
       await sql`
         INSERT INTO security_events (event_type, severity, description, ip, user_agent, detail)
         VALUES ('LOGIN_FAILED', 'INFO', ${'A sign-in attempt failed'}, ${security.ip},
-                ${security.userAgent}, ${sql.json({ email: body.email.slice(0, 3) + '***' } as never)})
+                ${security.userAgent}, ${sql.json({ email: body.email.slice(0, 3) + '***' })})
       `.catch(() => {});
       throw err;
     }
 
     const { user, requiresWebAuthn } = stage;
-    const deviceFingerprint = await deriveDeviceFingerprint(body.deviceId ?? null, security.userAgent);
+    const deviceFingerprint = await deriveDeviceFingerprint(
+      body.deviceId ?? null,
+      security.userAgent,
+    );
 
     if (requiresWebAuthn) {
       const credentials = await sql<{ credential_id: string; transports: string[] }[]>`
@@ -132,7 +135,7 @@ authRoutes.post('/login', async (c) => {
         INSERT INTO security_events (organization_id, user_id, event_type, severity, description, ip, detail)
         VALUES (${user.organization_id}, ${user.id}, 'WEBAUTHN_CHALLENGE_ISSUED', 'INFO',
                 ${'A WebAuthn challenge was issued during sign-in'}, ${security.ip},
-                ${sql.json({ challenge: options.challenge, ticket, deviceFingerprint } as never)})
+                ${sql.json({ challenge: options.challenge, ticket, deviceFingerprint })})
       `;
 
       return {
@@ -199,7 +202,13 @@ authRoutes.post('/webauthn/authenticate', async (c) => {
 
   const result = await withConnection(c.env, c.executionCtx, async (sql) => {
     const events = await sql<
-      { id: string; organization_id: string; user_id: string; detail: { challenge: string; ticket: string }; created_at: string }[]
+      {
+        id: string;
+        organization_id: string;
+        user_id: string;
+        detail: { challenge: string; ticket: string };
+        created_at: string;
+      }[]
     >`
       SELECT id, organization_id, user_id, detail, created_at
         FROM security_events
@@ -211,14 +220,23 @@ authRoutes.post('/webauthn/authenticate', async (c) => {
     `;
     const pending = events[0];
     if (!pending) {
-      throw authenticationError('WEBAUTHN_CHALLENGE_EXPIRED', 'That sign-in attempt expired. Start again.');
+      throw authenticationError(
+        'WEBAUTHN_CHALLENGE_EXPIRED',
+        'That sign-in attempt expired. Start again.',
+      );
     }
 
     const response = body.response as Record<string, unknown> & { id?: string };
     const credentialId = typeof response.id === 'string' ? response.id : '';
 
     const credentials = await sql<
-      { id: string; credential_id: string; public_key: Uint8Array; signature_counter: string; transports: string[] }[]
+      {
+        id: string;
+        credential_id: string;
+        public_key: Uint8Array;
+        signature_counter: string;
+        transports: string[];
+      }[]
     >`
       SELECT id, credential_id, public_key, signature_counter, transports
         FROM webauthn_credentials
@@ -227,7 +245,10 @@ authRoutes.post('/webauthn/authenticate', async (c) => {
     `;
     const credential = credentials[0];
     if (!credential) {
-      throw authenticationError('WEBAUTHN_CREDENTIAL_UNKNOWN', 'That authenticator is not registered to this account');
+      throw authenticationError(
+        'WEBAUTHN_CREDENTIAL_UNKNOWN',
+        'That authenticator is not registered to this account',
+      );
     }
 
     let verification;
@@ -250,13 +271,19 @@ authRoutes.post('/webauthn/authenticate', async (c) => {
         INSERT INTO security_events (organization_id, user_id, event_type, severity, description, ip, detail)
         VALUES (${pending.organization_id}, ${pending.user_id}, 'WEBAUTHN_VERIFICATION_FAILED', 'WARNING',
                 ${'A WebAuthn assertion failed verification'}, ${security.ip},
-                ${sql.json({ error: err instanceof Error ? err.message : 'unknown' } as never)})
+                ${sql.json({ error: err instanceof Error ? err.message : 'unknown' })})
       `;
-      throw authenticationError('WEBAUTHN_VERIFICATION_FAILED', 'The security key verification failed');
+      throw authenticationError(
+        'WEBAUTHN_VERIFICATION_FAILED',
+        'The security key verification failed',
+      );
     }
 
     if (!verification.verified) {
-      throw authenticationError('WEBAUTHN_VERIFICATION_FAILED', 'The security key verification failed');
+      throw authenticationError(
+        'WEBAUTHN_VERIFICATION_FAILED',
+        'The security key verification failed',
+      );
     }
 
     // Cloned-authenticator detection. Both counters at zero is normal for some platform
@@ -268,7 +295,7 @@ authRoutes.post('/webauthn/authenticate', async (c) => {
         INSERT INTO security_events (organization_id, user_id, event_type, severity, description, ip, detail)
         VALUES (${pending.organization_id}, ${pending.user_id}, 'WEBAUTHN_COUNTER_REGRESSION', 'CRITICAL',
                 ${'An authenticator signature counter did not advance, which can indicate a cloned key'},
-                ${security.ip}, ${sql.json({ storedCounter, newCounter } as never)})
+                ${security.ip}, ${sql.json({ storedCounter, newCounter })})
       `;
       throw authenticationError(
         'WEBAUTHN_COUNTER_REGRESSION',
@@ -292,7 +319,10 @@ authRoutes.post('/webauthn/authenticate', async (c) => {
     const user = users[0]!;
 
     // Register or refresh the trusted device binding (spec 8.1).
-    const deviceFingerprint = await deriveDeviceFingerprint(body.deviceId ?? null, security.userAgent);
+    const deviceFingerprint = await deriveDeviceFingerprint(
+      body.deviceId ?? null,
+      security.userAgent,
+    );
     let trustedDeviceId: string | null = null;
     if (deviceFingerprint) {
       const devices = await sql<{ id: string; trust_status: string }[]>`
@@ -308,7 +338,10 @@ authRoutes.post('/webauthn/authenticate', async (c) => {
         RETURNING id, trust_status
       `;
       if (devices[0]?.trust_status === 'BLOCKED' || devices[0]?.trust_status === 'REVOKED') {
-        throw authenticationError('DEVICE_BLOCKED', 'This device is not permitted to access SOLVAREN');
+        throw authenticationError(
+          'DEVICE_BLOCKED',
+          'This device is not permitted to access SOLVAREN',
+        );
       }
       trustedDeviceId = devices[0]?.id ?? null;
     }
@@ -381,7 +414,7 @@ authRoutes.post('/webauthn/register/options', requireAuth, async (c) => {
       INSERT INTO security_events (organization_id, user_id, event_type, severity, description, detail)
       VALUES (${actor.organizationId}, ${actor.userId}, 'WEBAUTHN_REGISTRATION_STARTED', 'INFO',
               ${'An authenticator enrolment was started'},
-              ${sql.json({ challenge: generated.challenge } as never)})
+              ${sql.json({ challenge: generated.challenge })})
     `;
     return generated;
   });
@@ -406,7 +439,10 @@ authRoutes.post('/webauthn/register', requireAuth, async (c) => {
     `;
     const pending = events[0];
     if (!pending) {
-      throw validationError('WEBAUTHN_REGISTRATION_EXPIRED', 'That enrolment expired. Start again.');
+      throw validationError(
+        'WEBAUTHN_REGISTRATION_EXPIRED',
+        'That enrolment expired. Start again.',
+      );
     }
 
     const verification = await verifyRegistrationResponse({
@@ -418,7 +454,10 @@ authRoutes.post('/webauthn/register', requireAuth, async (c) => {
     });
 
     if (!verification.verified || !verification.registrationInfo) {
-      throw validationError('WEBAUTHN_REGISTRATION_FAILED', 'The authenticator could not be registered');
+      throw validationError(
+        'WEBAUTHN_REGISTRATION_FAILED',
+        'The authenticator could not be registered',
+      );
     }
 
     const info = verification.registrationInfo;
@@ -657,4 +696,5 @@ void timingSafeEqual;
 void fromBase64Url;
 void toBase64Url;
 
-type AuthenticatorTransportFuture = 'ble' | 'cable' | 'hybrid' | 'internal' | 'nfc' | 'smart-card' | 'usb';
+type AuthenticatorTransportFuture =
+  'ble' | 'cable' | 'hybrid' | 'internal' | 'nfc' | 'smart-card' | 'usb';

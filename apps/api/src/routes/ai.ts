@@ -146,7 +146,15 @@ aiRoutes.post('/batches/:id/analyse', requirePermissions('ai:batch_analysis'), a
 
   const context = await withConnection(c.env, c.executionCtx, async (sql) => {
     const batches = await sql<
-      { batch_reference: string; purpose: string; state: string; instruction_count: number; total_amount_cents: string; risk_score: number | null; risk_band: string | null }[]
+      {
+        batch_reference: string;
+        purpose: string;
+        state: string;
+        instruction_count: number;
+        total_amount_cents: string;
+        risk_score: number | null;
+        risk_band: string | null;
+      }[]
     >`
       SELECT batch_reference, purpose, state, instruction_count, total_amount_cents, risk_score, risk_band
         FROM payment_batches WHERE id = ${batchId} AND organization_id = ${actor.organizationId}
@@ -154,7 +162,9 @@ aiRoutes.post('/batches/:id/analyse', requirePermissions('ai:batch_analysis'), a
     const batch = batches[0];
     if (!batch) throw notFoundError('BATCH_NOT_FOUND', 'That batch could not be found');
 
-    const findings = await sql<{ signal_type: string; severity: string; summary: string; disposition: string }[]>`
+    const findings = await sql<
+      { signal_type: string; severity: string; summary: string; disposition: string }[]
+    >`
       SELECT signal_type, severity, summary, disposition
         FROM risk_findings WHERE batch_id = ${batchId}
        ORDER BY CASE severity WHEN 'CRITICAL' THEN 0 WHEN 'HIGH' THEN 1 WHEN 'MEDIUM' THEN 2 ELSE 3 END
@@ -189,7 +199,14 @@ ${context.findings.length === 0 ? '- none' : context.findings.map((f) => `- [${f
 Write two short paragraphs: what this batch is, and what the reviewer should check before approving. Do not recommend approving or rejecting — that decision is theirs.`;
 
   const result = await callModel(c.env, SYSTEM_PROMPT, prompt);
-  await recordInteraction(c, 'BATCH_ANALYSIS', `Analyse batch ${context.batch.batch_reference}`, context, result, result.text);
+  await recordInteraction(
+    c,
+    'BATCH_ANALYSIS',
+    `Analyse batch ${context.batch.batch_reference}`,
+    context,
+    result,
+    result.text,
+  );
 
   return c.json({
     // The deterministic findings are the authoritative part of this response.
@@ -215,7 +232,10 @@ Write two short paragraphs: what this batch is, and what the reviewer should che
 aiRoutes.post('/failures/explain', requirePermissions('ai:batch_analysis'), async (c) => {
   const actor = actorOf(c);
   const body = z
-    .object({ transactionId: z.string().uuid().optional(), failureCode: z.string().max(40).optional() })
+    .object({
+      transactionId: z.string().uuid().optional(),
+      failureCode: z.string().max(40).optional(),
+    })
     .parse(await c.req.json());
 
   const context = await withConnection(c.env, c.executionCtx, async (sql) => {
@@ -223,7 +243,13 @@ aiRoutes.post('/failures/explain', requirePermissions('ai:batch_analysis'), asyn
 
     if (body.transactionId) {
       const rows = await sql<
-        { failure_code: string | null; failure_reason: string | null; provider_result_description: string | null; status: string; amount_cents: string }[]
+        {
+          failure_code: string | null;
+          failure_reason: string | null;
+          provider_result_description: string | null;
+          status: string;
+          amount_cents: string;
+        }[]
       >`
         SELECT t.failure_code, t.failure_reason, t.provider_result_description, t.status, pi.amount_cents
           FROM transactions t
@@ -259,7 +285,14 @@ ${context.amountCents !== null ? `Amount: KES ${formatCents(context.amountCents)
 In three sentences: what happened, why, and what the officer should do next. Stay within the documented action above.`;
 
   const result = await callModel(c.env, SYSTEM_PROMPT, prompt);
-  await recordInteraction(c, 'FAILURE_EXPLANATION', `Explain ${context.resolved.failureCode}`, context, result, result.text);
+  await recordInteraction(
+    c,
+    'FAILURE_EXPLANATION',
+    `Explain ${context.resolved.failureCode}`,
+    context,
+    result,
+    result.text,
+  );
 
   return c.json({
     // Never blank, with or without the AI layer (TRK-002).
@@ -381,15 +414,28 @@ Unresolved reconciliation cases: ${context.unresolved}
 Write four or five sentences in the style of a board briefing: the movement, its main driver, the risk position, and anything outstanding. State figures precisely.`;
 
   const result = await callModel(c.env, SYSTEM_PROMPT, prompt);
-  await recordInteraction(c, 'EXECUTIVE_BRIEFING', 'Executive briefing', context, result, result.text);
+  await recordInteraction(
+    c,
+    'EXECUTIVE_BRIEFING',
+    'Executive briefing',
+    context,
+    result,
+    result.text,
+  );
 
   return c.json({
     briefing: result.degraded ? null : result.text,
     degraded: result.degraded,
     figures: {
-      monthlyDisbursements: context.months.map((m) => ({ period: m.period, totalCents: Number(m.total) })),
+      monthlyDisbursements: context.months.map((m) => ({
+        period: m.period,
+        totalCents: Number(m.total),
+      })),
       unresolvedReconciliationCases: context.unresolved,
-      topFailureReasons: context.failures.map((f) => ({ reason: f.failure_reason, count: Number(f.count) })),
+      topFailureReasons: context.failures.map((f) => ({
+        reason: f.failure_reason,
+        count: Number(f.count),
+      })),
     },
     advisoryNotice: ADVISORY_NOTICE,
   });

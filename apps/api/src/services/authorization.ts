@@ -38,9 +38,7 @@ import {
   notFoundError,
   policyError,
   type Manifest,
-  type AuthorityLevel,
   type BatchState,
-  type Permission,
   type OrganizationPolicy,
   type RiskAssessment,
 } from '@solvaren/core';
@@ -125,7 +123,7 @@ export async function openAuthorizationCeremony(params: {
     `;
     assertNotSelfAuthorization({
       actorUserId: actor.userId,
-      actorLevel: actor.level as AuthorityLevel,
+      actorLevel: actor.level,
       participants: {
         createdByUserId: batch.created_by_user_id,
         editedByUserIds: editors.map((e) => e.user_id),
@@ -141,7 +139,12 @@ export async function openAuthorizationCeremony(params: {
        WHERE batch_id = ${batch.id}
     `;
     const conflicts = await tx<
-      { user_id: string; scope_type: 'RECIPIENT' | 'DEPARTMENT' | 'ORGANIZATION'; scope_id: string | null; reason: string }[]
+      {
+        user_id: string;
+        scope_type: 'RECIPIENT' | 'DEPARTMENT' | 'ORGANIZATION';
+        scope_id: string | null;
+        reason: string;
+      }[]
     >`
       SELECT user_id, scope_type, scope_id, reason
         FROM conflict_registrations
@@ -383,7 +386,10 @@ export async function releaseBatch(input: ReleaseInput): Promise<ReleaseResult> 
       throw notFoundError('CHALLENGE_NOT_FOUND', 'That authorization ceremony could not be found');
     }
     if (stored.abandoned_at) {
-      throw stateError('CHALLENGE_ABANDONED', 'That authorization ceremony was abandoned. Start a new one.');
+      throw stateError(
+        'CHALLENGE_ABANDONED',
+        'That authorization ceremony was abandoned. Start a new one.',
+      );
     }
 
     // Rebuild from live state — never from the stored copy.
@@ -418,7 +424,7 @@ export async function releaseBatch(input: ReleaseInput): Promise<ReleaseResult> 
     `;
     assertNotSelfAuthorization({
       actorUserId: actor.userId,
-      actorLevel: actor.level as AuthorityLevel,
+      actorLevel: actor.level,
       participants: {
         createdByUserId: batch.created_by_user_id,
         editedByUserIds: editors.map((e) => e.user_id),
@@ -624,7 +630,11 @@ export async function abandonCeremony(params: {
 // Shared helpers
 // ---------------------------------------------------------------------------
 
-export async function loadBatch(tx: Sql, organizationId: string, batchId: string): Promise<BatchRow> {
+export async function loadBatch(
+  tx: Sql,
+  organizationId: string,
+  batchId: string,
+): Promise<BatchRow> {
   const rows = await tx<BatchRow[]>`
     SELECT id, organization_id, batch_reference, state, version, instruction_count,
            total_amount_cents, created_by_user_id, submitted_by_user_id, approved_by_user_id,

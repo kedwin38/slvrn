@@ -47,18 +47,24 @@ const b2cRequest = {
 describe('access token lifecycle', () => {
   it('authenticates with Basic auth over GET, as Daraja requires', async () => {
     const fetchImpl = vi.fn(async () => jsonResponse(tokenBody));
-    const client = new DarajaClient({ environment: 'sandbox', credentials, fetchImpl: fetchImpl as any });
+    const client = new DarajaClient({ environment: 'sandbox', credentials, fetchImpl: fetchImpl });
 
     await client.getAccessToken();
     const [url, init] = fetchImpl.mock.calls[0]!;
-    expect(url).toBe('https://sandbox.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials');
+    expect(url).toBe(
+      'https://sandbox.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials',
+    );
     expect((init as RequestInit).method).toBe('GET');
     expect((init as any).headers.Authorization).toBe(`Basic ${btoa('ck-test:cs-test')}`);
   });
 
   it('uses the production host when configured for production', async () => {
     const fetchImpl = vi.fn(async () => jsonResponse(tokenBody));
-    const client = new DarajaClient({ environment: 'production', credentials, fetchImpl: fetchImpl as any });
+    const client = new DarajaClient({
+      environment: 'production',
+      credentials,
+      fetchImpl: fetchImpl,
+    });
     await client.getAccessToken();
     expect(fetchImpl.mock.calls[0]![0]).toContain('https://api.safaricom.co.ke');
   });
@@ -69,7 +75,7 @@ describe('access token lifecycle', () => {
     const client = new DarajaClient({
       environment: 'sandbox',
       credentials,
-      fetchImpl: fetchImpl as any,
+      fetchImpl: fetchImpl,
       now: () => now,
     });
 
@@ -92,7 +98,7 @@ describe('access token lifecycle', () => {
       await new Promise((r) => setTimeout(r, 5));
       return jsonResponse(tokenBody);
     });
-    const client = new DarajaClient({ environment: 'sandbox', credentials, fetchImpl: fetchImpl as any });
+    const client = new DarajaClient({ environment: 'sandbox', credentials, fetchImpl: fetchImpl });
 
     const tokens = await Promise.all(Array.from({ length: 200 }, () => client.getAccessToken()));
     expect(fetchImpl).toHaveBeenCalledTimes(1);
@@ -101,9 +107,12 @@ describe('access token lifecycle', () => {
 
   it('surfaces an authentication failure with the provider error code', async () => {
     const fetchImpl = vi.fn(async () =>
-      jsonResponse({ requestId: 'r1', errorCode: '401.002.01', errorMessage: 'Invalid credentials' }, 401),
+      jsonResponse(
+        { requestId: 'r1', errorCode: '401.002.01', errorMessage: 'Invalid credentials' },
+        401,
+      ),
     );
-    const client = new DarajaClient({ environment: 'sandbox', credentials, fetchImpl: fetchImpl as any });
+    const client = new DarajaClient({ environment: 'sandbox', credentials, fetchImpl: fetchImpl });
     await expect(client.getAccessToken()).rejects.toMatchObject({
       code: 'DARAJA_HTTP_ERROR',
       details: { errorCode: '401.002.01', httpStatus: 401 },
@@ -119,7 +128,11 @@ describe('B2C submission', () => {
 
   it('posts to the v3 B2C endpoint with a bearer token', async () => {
     const fetchImpl = okFetch();
-    const client = new DarajaClient({ environment: 'production', credentials, fetchImpl: fetchImpl as any });
+    const client = new DarajaClient({
+      environment: 'production',
+      credentials,
+      fetchImpl: fetchImpl as any,
+    });
     const ack = await client.sendB2cPayment(b2cRequest);
 
     expect(ack.ResponseCode).toBe('0');
@@ -135,12 +148,23 @@ describe('B2C submission', () => {
     const fetchImpl = vi.fn(async (url: string) =>
       String(url).includes('/oauth/')
         ? jsonResponse(tokenBody)
-        : jsonResponse({ requestId: 'r', errorCode: '404.001.03', errorMessage: 'Invalid Access Token' }, 404),
+        : jsonResponse(
+            { requestId: 'r', errorCode: '404.001.03', errorMessage: 'Invalid Access Token' },
+            404,
+          ),
     );
-    const client = new DarajaClient({ environment: 'sandbox', credentials, fetchImpl: fetchImpl as any });
+    const client = new DarajaClient({
+      environment: 'sandbox',
+      credentials,
+      fetchImpl: fetchImpl as any,
+    });
 
-    await expect(client.sendB2cPayment(b2cRequest)).rejects.toMatchObject({ code: 'DARAJA_HTTP_ERROR' });
-    const paymentCalls = fetchImpl.mock.calls.filter((c) => String(c[0]).includes('paymentrequest'));
+    await expect(client.sendB2cPayment(b2cRequest)).rejects.toMatchObject({
+      code: 'DARAJA_HTTP_ERROR',
+    });
+    const paymentCalls = fetchImpl.mock.calls.filter((c) =>
+      String(c[0]).includes('paymentrequest'),
+    );
     expect(paymentCalls).toHaveLength(1);
   });
 
@@ -150,7 +174,11 @@ describe('B2C submission', () => {
         ? jsonResponse(tokenBody)
         : jsonResponse({ ResponseCode: '1', ResponseDescription: 'Request failed' }),
     );
-    const client = new DarajaClient({ environment: 'sandbox', credentials, fetchImpl: fetchImpl as any });
+    const client = new DarajaClient({
+      environment: 'sandbox',
+      credentials,
+      fetchImpl: fetchImpl as any,
+    });
     await expect(client.sendB2cPayment(b2cRequest)).rejects.toMatchObject({
       code: 'DARAJA_REQUEST_REJECTED',
       details: { responseCode: '1' },
@@ -162,11 +190,19 @@ describe('B2C submission', () => {
       String(url).includes('/oauth/')
         ? jsonResponse(tokenBody)
         : jsonResponse(
-            { requestId: 'r', errorCode: '500.002.1001', errorMessage: 'Duplicate OriginatorConversationID.' },
+            {
+              requestId: 'r',
+              errorCode: '500.002.1001',
+              errorMessage: 'Duplicate OriginatorConversationID.',
+            },
             500,
           ),
     );
-    const client = new DarajaClient({ environment: 'sandbox', credentials, fetchImpl: fetchImpl as any });
+    const client = new DarajaClient({
+      environment: 'sandbox',
+      credentials,
+      fetchImpl: fetchImpl as any,
+    });
     await expect(client.sendB2cPayment(b2cRequest)).rejects.toMatchObject({
       details: { errorCode: '500.002.1001' },
     });
@@ -189,7 +225,9 @@ describe('B2C submission', () => {
       fetchImpl: fetchImpl as any,
       timeoutMs: 20,
     });
-    await expect(client.sendB2cPayment(b2cRequest)).rejects.toMatchObject({ code: 'DARAJA_TIMEOUT' });
+    await expect(client.sendB2cPayment(b2cRequest)).rejects.toMatchObject({
+      code: 'DARAJA_TIMEOUT',
+    });
   });
 
   it('never echoes credential material into an error', async () => {
@@ -197,7 +235,11 @@ describe('B2C submission', () => {
       if (String(url).includes('/oauth/')) return jsonResponse(tokenBody);
       throw new Error('socket hang up');
     });
-    const client = new DarajaClient({ environment: 'sandbox', credentials, fetchImpl: fetchImpl as any });
+    const client = new DarajaClient({
+      environment: 'sandbox',
+      credentials,
+      fetchImpl: fetchImpl as any,
+    });
     try {
       await client.sendB2cPayment(b2cRequest);
       expect.unreachable('should have thrown');
@@ -216,11 +258,18 @@ describe('read-only queries', () => {
       if (String(url).includes('/oauth/')) return jsonResponse(tokenBody);
       paymentCalls += 1;
       if (paymentCalls === 1) {
-        return jsonResponse({ requestId: 'r', errorCode: '404.001.03', errorMessage: 'Invalid Access Token' }, 404);
+        return jsonResponse(
+          { requestId: 'r', errorCode: '404.001.03', errorMessage: 'Invalid Access Token' },
+          404,
+        );
       }
       return jsonResponse(ackBody);
     });
-    const client = new DarajaClient({ environment: 'sandbox', credentials, fetchImpl: fetchImpl as any });
+    const client = new DarajaClient({
+      environment: 'sandbox',
+      credentials,
+      fetchImpl: fetchImpl as any,
+    });
 
     const ack = await client.queryTransactionStatus({
       Initiator: 'testapi',
@@ -239,7 +288,7 @@ describe('read-only queries', () => {
 
   it('reports a successful connection test without moving money', async () => {
     const fetchImpl = vi.fn(async () => jsonResponse(tokenBody));
-    const client = new DarajaClient({ environment: 'sandbox', credentials, fetchImpl: fetchImpl as any });
+    const client = new DarajaClient({ environment: 'sandbox', credentials, fetchImpl: fetchImpl });
     const result = await client.testConnection();
 
     expect(result.ok).toBe(true);
@@ -248,8 +297,10 @@ describe('read-only queries', () => {
   });
 
   it('reports a failed connection test as a message, not an exception', async () => {
-    const fetchImpl = vi.fn(async () => jsonResponse({ errorCode: '401.002.01', errorMessage: 'bad key' }, 401));
-    const client = new DarajaClient({ environment: 'sandbox', credentials, fetchImpl: fetchImpl as any });
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse({ errorCode: '401.002.01', errorMessage: 'bad key' }, 401),
+    );
+    const client = new DarajaClient({ environment: 'sandbox', credentials, fetchImpl: fetchImpl });
     const result = await client.testConnection();
     expect(result.ok).toBe(false);
     expect(result.message).toBe('bad key');
@@ -322,8 +373,13 @@ describe('B2C result callback parsing', () => {
   });
 
   it('accepts ResultCode as either a number or a string', () => {
-    expect(parseB2cResult({ Result: { ResultCode: 0, ResultDesc: 'ok', TransactionID: 'A' } }).succeeded).toBe(true);
-    expect(parseB2cResult({ Result: { ResultCode: '0', ResultDesc: 'ok', TransactionID: 'A' } }).succeeded).toBe(true);
+    expect(
+      parseB2cResult({ Result: { ResultCode: 0, ResultDesc: 'ok', TransactionID: 'A' } }).succeeded,
+    ).toBe(true);
+    expect(
+      parseB2cResult({ Result: { ResultCode: '0', ResultDesc: 'ok', TransactionID: 'A' } })
+        .succeeded,
+    ).toBe(true);
   });
 
   it('rejects a structurally invalid callback rather than guessing', () => {
@@ -378,11 +434,16 @@ describe('account balance parsing (§21 executive panel)', () => {
       'Working Account|KES|700000.00|700000.00|0.00|0.00&Float Account|KES|0.00|0.00|0.00|0.00&Utility Account|KES|228037.00|228037.00|0.00|0.00&Charges Paid Account|KES|-1540.00|-1540.00|0.00|0.00&Organization Settlement Account|KES|0.00|0.00|0.00|0.00',
     );
     expect(accounts).toHaveLength(5);
-    expect(accounts[0]).toMatchObject({ accountType: 'Working Account', availableBalanceCents: 700_000_00 });
+    expect(accounts[0]).toMatchObject({
+      accountType: 'Working Account',
+      availableBalanceCents: 700_000_00,
+    });
     const utility = accounts.find((a) => a.accountType === 'Utility Account')!;
     expect(utility.availableBalanceCents).toBe(228_037_00);
     // Charges Paid always carries a negative balance — it must not be clamped to zero.
-    expect(accounts.find((a) => a.accountType === 'Charges Paid Account')!.availableBalanceCents).toBe(-154_000);
+    expect(
+      accounts.find((a) => a.accountType === 'Charges Paid Account')!.availableBalanceCents,
+    ).toBe(-154_000);
   });
 
   it('parses a full balance callback', () => {
@@ -431,7 +492,7 @@ describe('value coercion helpers', () => {
         ResultParameters: { ResultParameter: { Key: 'A', Value: '1' } },
         ReferenceData: { ReferenceItem: [{ Key: 'B', Value: '2' }] },
       },
-    } as any);
+    });
     expect(params).toEqual({ A: '1', B: '2' });
   });
 });

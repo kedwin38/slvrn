@@ -81,8 +81,22 @@ export async function verifyAuthorizationPin(
 }
 
 const TRIVIAL_PINS = new Set([
-  '000000', '111111', '222222', '333333', '444444', '555555', '666666', '777777',
-  '888888', '999999', '123456', '654321', '012345', '543210', '121212', '112233',
+  '000000',
+  '111111',
+  '222222',
+  '333333',
+  '444444',
+  '555555',
+  '666666',
+  '777777',
+  '888888',
+  '999999',
+  '123456',
+  '654321',
+  '012345',
+  '543210',
+  '121212',
+  '112233',
 ]);
 
 export function assertPinShape(pin: string): void {
@@ -90,7 +104,10 @@ export function assertPinShape(pin: string): void {
     throw validationError('PIN_FORMAT', 'The authorization PIN must be 6 to 12 digits');
   }
   if (TRIVIAL_PINS.has(pin)) {
-    throw validationError('PIN_TRIVIAL', 'That authorization PIN is too easily guessed. Choose another.');
+    throw validationError(
+      'PIN_TRIVIAL',
+      'That authorization PIN is too easily guessed. Choose another.',
+    );
   }
   // Reject strictly ascending or descending runs of any length, e.g. 345678.
   const digits = [...pin].map(Number);

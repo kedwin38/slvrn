@@ -82,7 +82,10 @@ export async function sha256Hex(input: string): Promise<string> {
 /** Deterministic serialization of the payment payload. Order and format are the contract. */
 export function canonicalizeManifest(input: ManifestInput): string {
   if (input.instructions.length === 0) {
-    throw validationError('MANIFEST_EMPTY', 'A payment manifest must contain at least one instruction');
+    throw validationError(
+      'MANIFEST_EMPTY',
+      'A payment manifest must contain at least one instruction',
+    );
   }
   if (input.approvedBatchVersion !== input.batchVersion) {
     // Refusing here (rather than hashing a mismatch) makes the failure loud at the exact
@@ -101,11 +104,17 @@ export function canonicalizeManifest(input: ManifestInput): string {
   const seen = new Set<string>();
   for (const i of sorted) {
     if (seen.has(i.instructionId)) {
-      throw validationError('MANIFEST_DUPLICATE_INSTRUCTION', `Instruction ${i.instructionId} appears twice`);
+      throw validationError(
+        'MANIFEST_DUPLICATE_INSTRUCTION',
+        `Instruction ${i.instructionId} appears twice`,
+      );
     }
     seen.add(i.instructionId);
     if (!Number.isSafeInteger(i.amountCents) || i.amountCents <= 0) {
-      throw validationError('MANIFEST_AMOUNT_INVALID', `Instruction ${i.instructionId} has a non-positive amount`);
+      throw validationError(
+        'MANIFEST_AMOUNT_INVALID',
+        `Instruction ${i.instructionId} has a non-positive amount`,
+      );
     }
   }
 
@@ -184,7 +193,10 @@ export const CHALLENGE_TTL_MS = 5 * 60 * 1000;
 export async function buildChallenge(input: ChallengeInput): Promise<AuthorizationChallenge> {
   const { manifest, nonce, expiresAt, authorizerUserId } = input;
   if (!nonce || nonce.length < 16) {
-    throw validationError('CHALLENGE_NONCE_WEAK', 'Authorization nonce must be at least 16 characters');
+    throw validationError(
+      'CHALLENGE_NONCE_WEAK',
+      'Authorization nonce must be at least 16 characters',
+    );
   }
   const payload = [
     MANIFEST_VERSION,
@@ -236,14 +248,22 @@ export function verifyChallengeBinding(input: ChallengeVerificationInput): void 
   const { stored, current, presentingUserId, now } = input;
 
   if (stored.consumedAt !== null) {
-    throw stateError('CHALLENGE_ALREADY_CONSUMED', 'This authorization challenge has already been used', {
-      consumedAt: stored.consumedAt,
-    });
+    throw stateError(
+      'CHALLENGE_ALREADY_CONSUMED',
+      'This authorization challenge has already been used',
+      {
+        consumedAt: stored.consumedAt,
+      },
+    );
   }
   if (now > stored.expiresAt) {
-    throw stateError('CHALLENGE_EXPIRED', 'This authorization challenge has expired; start a new authorization', {
-      expiresAt: stored.expiresAt,
-    });
+    throw stateError(
+      'CHALLENGE_EXPIRED',
+      'This authorization challenge has expired; start a new authorization',
+      {
+        expiresAt: stored.expiresAt,
+      },
+    );
   }
   if (stored.authorizerUserId !== presentingUserId) {
     throw stateError(
@@ -252,7 +272,10 @@ export function verifyChallengeBinding(input: ChallengeVerificationInput): void 
     );
   }
   if (stored.batchId !== current.batchId) {
-    throw stateError('CHALLENGE_BATCH_MISMATCH', 'This authorization challenge belongs to a different batch');
+    throw stateError(
+      'CHALLENGE_BATCH_MISMATCH',
+      'This authorization challenge belongs to a different batch',
+    );
   }
   if (stored.manifestHash !== current.manifestHash) {
     throw stateError(

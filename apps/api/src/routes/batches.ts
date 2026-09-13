@@ -86,7 +86,10 @@ batchRoutes.post('/', requirePermissions('batch:create'), async (c) => {
     }),
   );
 
-  return c.json({ batchId: batch.id, batchReference: batch.batch_reference, state: batch.state }, 201);
+  return c.json(
+    { batchId: batch.id, batchReference: batch.batch_reference, state: batch.state },
+    201,
+  );
 });
 
 /**
@@ -220,7 +223,10 @@ batchRoutes.post('/:id/upload', requirePermissions('batch:edit'), async (c) => {
 
       return {
         accepted: inserted,
-        rejected: [...parsed.errors, ...unresolved.map((u) => ({ ...u, column: 'row' as const, value: '' }))],
+        rejected: [
+          ...parsed.errors,
+          ...unresolved.map((u) => ({ ...u, column: 'row' as const, value: '' })),
+        ],
         duplicateWarnings: parsed.duplicateWarnings,
         totalAmountCents: parsed.totalAmountCents,
         state: 'DRAFT' as BatchState,
@@ -691,14 +697,28 @@ batchRoutes.get('/:id', requirePermissions('batch:read'), async (c) => {
     `;
 
     const approvals = await sql<
-      { approval_reference: string; action: string; actor_level: string; reason: string | null; batch_version: number; created_at: string }[]
+      {
+        approval_reference: string;
+        action: string;
+        actor_level: string;
+        reason: string | null;
+        batch_version: number;
+        created_at: string;
+      }[]
     >`
       SELECT approval_reference, action, actor_level, reason, batch_version, created_at
         FROM approvals WHERE batch_id = ${batchId} ORDER BY created_at ASC
     `;
 
     const findings = await sql<
-      { signal_type: string; severity: string; summary: string; evidence: unknown; disposition: string; batch_version: number }[]
+      {
+        signal_type: string;
+        severity: string;
+        summary: string;
+        evidence: unknown;
+        disposition: string;
+        batch_version: number;
+      }[]
     >`
       SELECT signal_type, severity, summary, evidence, disposition, batch_version
         FROM risk_findings WHERE batch_id = ${batchId}
@@ -735,7 +755,10 @@ batchRoutes.get('/:id', requirePermissions('batch:read'), async (c) => {
       approvals,
       // Findings from superseded versions are shown but marked, so a reviewer can see that
       // an earlier version raised a concern that an edit has since changed.
-      riskFindings: findings.map((f) => ({ ...f, currentVersion: f.batch_version === batch.version })),
+      riskFindings: findings.map((f) => ({
+        ...f,
+        currentVersion: f.batch_version === batch.version,
+      })),
     };
   });
 

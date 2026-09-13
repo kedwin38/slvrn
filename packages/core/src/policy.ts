@@ -112,7 +112,10 @@ export function evaluateReleasePolicy(input: PolicyEvaluationInput): PolicyEvalu
     });
   }
 
-  if (input.totalAmountCents >= policy.highValueThresholdCents && policy.highValueThresholdCents > 0) {
+  if (
+    input.totalAmountCents >= policy.highValueThresholdCents &&
+    policy.highValueThresholdCents > 0
+  ) {
     acknowledgementsRequired.push(
       `This is a high-value release of KES ${formatCents(input.totalAmountCents)} to ${input.instructionCount} recipients.`,
     );
@@ -130,7 +133,9 @@ export function evaluateReleasePolicy(input: PolicyEvaluationInput): PolicyEvalu
 export function assertReleasePolicy(input: PolicyEvaluationInput): PolicyEvaluation {
   const result = evaluateReleasePolicy(input);
   if (!result.allowed) {
-    throw policyError('POLICY_VIOLATION', result.violations[0]!.message, { violations: result.violations });
+    throw policyError('POLICY_VIOLATION', result.violations[0]!.message, {
+      violations: result.violations,
+    });
   }
   return result;
 }

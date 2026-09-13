@@ -34,7 +34,13 @@ export async function assessBatch(
   policy: OrganizationPolicy,
 ): Promise<RiskAssessment> {
   const instructions = await tx<
-    { id: string; recipient_id: string; msisdn_snapshot: string; amount_cents: string; department_id: string | null }[]
+    {
+      id: string;
+      recipient_id: string;
+      msisdn_snapshot: string;
+      amount_cents: string;
+      department_id: string | null;
+    }[]
   >`
     SELECT id, recipient_id, msisdn_snapshot, amount_cents, department_id
       FROM payment_instructions
@@ -90,7 +96,9 @@ export async function assessBatch(
      WHERE organization_id = ${batch.organization_id} AND state IN ('OPEN', 'QUERYING')
   `;
 
-  const pairs = await tx<{ approved_by_user_id: string; authorized_by_user_id: string; authorized_at: string }[]>`
+  const pairs = await tx<
+    { approved_by_user_id: string; authorized_by_user_id: string; authorized_at: string }[]
+  >`
     SELECT approved_by_user_id, authorized_by_user_id, authorized_at
       FROM payment_batches
      WHERE organization_id = ${batch.organization_id}
@@ -125,7 +133,9 @@ export async function assessBatch(
     history,
     priorBatchTotalsCents: priorTotals.map((t) => Number(t.total_amount_cents)),
     now: Date.now(),
-    lastMaterialEditAt: batch.last_material_edit_at ? new Date(batch.last_material_edit_at).getTime() : null,
+    lastMaterialEditAt: batch.last_material_edit_at
+      ? new Date(batch.last_material_edit_at).getTime()
+      : null,
     submittedAt: batch.submitted_at ? new Date(batch.submitted_at).getTime() : null,
     unresolvedReconciliationCount: Number(unresolved[0]?.count ?? 0),
     approvalConcentration: concentration.map((c) => ({

@@ -21,7 +21,7 @@ import {
 } from './middleware/security.js';
 import { authRoutes } from './routes/auth.js';
 import { batchRoutes } from './routes/batches.js';
-import { transactionRoutes } from './routes/transactions.js';
+import { transactionRoutes, exportRoutes } from './routes/transactions.js';
 import { authorizationRoutes } from './routes/authorization.js';
 import { dashboardRoutes } from './routes/dashboard.js';
 import { adminRoutes } from './routes/admin.js';
@@ -56,7 +56,7 @@ app.use('*', cors);
 // lower theirs.
 app.use('*', limitBodySize(1024 * 1024));
 
-app.onError((err, c) => errorHandler(err, c as never) as never);
+app.onError((err, c) => errorHandler(err, c));
 
 app.notFound((c) =>
   c.json(
@@ -102,7 +102,7 @@ app.get('/health/ready', async (c) => {
 app.route('/auth', authRoutes);
 app.route('/batches', batchRoutes);
 app.route('/payments', transactionRoutes);
-app.route('/exports', transactionRoutes);
+app.route('/exports', exportRoutes);
 app.route('/authorization', authorizationRoutes);
 app.route('/analytics', dashboardRoutes);
 app.route('/admin', adminRoutes);
@@ -115,10 +115,7 @@ app.route('/integrations', callbackRoutes);
 // ---------------------------------------------------------------------------
 
 type AnyQueueMessage =
-  | PaymentQueueMessage
-  | CallbackQueueMessage
-  | ReconciliationQueueMessage
-  | BackupQueueMessage;
+  PaymentQueueMessage | CallbackQueueMessage | ReconciliationQueueMessage | BackupQueueMessage;
 
 export default {
   fetch: app.fetch,
@@ -130,7 +127,11 @@ export default {
    * message must not force thirty healthy payments to be redelivered, which would be
    * thirty more opportunities for a double submission.
    */
-  async queue(batch: MessageBatch<AnyQueueMessage>, env: Env, ctx: ExecutionContext): Promise<void> {
+  async queue(
+    batch: MessageBatch<AnyQueueMessage>,
+    env: Env,
+    ctx: ExecutionContext,
+  ): Promise<void> {
     switch (batch.queue) {
       case 'solvaren-payments':
       case 'solvaren-payments-staging':
@@ -142,7 +143,11 @@ export default {
         break;
       case 'solvaren-reconciliation':
       case 'solvaren-reconciliation-staging':
-        await handleReconciliationBatch(batch as MessageBatch<ReconciliationQueueMessage>, env, ctx);
+        await handleReconciliationBatch(
+          batch as MessageBatch<ReconciliationQueueMessage>,
+          env,
+          ctx,
+        );
         break;
       case 'solvaren-backups':
       case 'solvaren-backups-staging':
@@ -183,7 +188,9 @@ export default {
         break;
 
       default:
-        console.warn(JSON.stringify({ level: 'warn', message: 'Unhandled cron', cron: event.cron }));
+        console.warn(
+          JSON.stringify({ level: 'warn', message: 'Unhandled cron', cron: event.cron }),
+        );
     }
   },
 };
@@ -234,10 +241,19 @@ async function runReconciliationSweep(
  * hours records a MISSED attempt before the next run is queued, so the gap is visible in
  * the history instead of being inferred from its absence.
  */
-async function runBackupSchedules(env: Env, ctx: ExecutionContext, correlation: string): Promise<void> {
+async function runBackupSchedules(
+  env: Env,
+  ctx: ExecutionContext,
+  correlation: string,
+): Promise<void> {
   await withConnection(env, ctx, async (sql) => {
     const due = await sql<
-      { organization_id: string; schedule_cron: string; last_scheduled_run_at: string | null; next_scheduled_run_at: string | null }[]
+      {
+        organization_id: string;
+        schedule_cron: string;
+        last_scheduled_run_at: string | null;
+        next_scheduled_run_at: string | null;
+      }[]
     >`
       SELECT organization_id, schedule_cron, last_scheduled_run_at, next_scheduled_run_at
         FROM backup_configurations
@@ -290,7 +306,11 @@ async function runBackupSchedules(env: Env, ctx: ExecutionContext, correlation: 
 }
 
 /** Daily housekeeping: expire stale ceremonies and sessions. Never touches ledger rows. */
-async function runHousekeeping(env: Env, ctx: ExecutionContext, correlation: string): Promise<void> {
+async function runHousekeeping(
+  env: Env,
+  ctx: ExecutionContext,
+  correlation: string,
+): Promise<void> {
   await withConnection(env, ctx, async (sql) => {
     // An authorization ceremony left open past its expiry blocks the partial unique index
     // and prevents a new one from being started.
@@ -306,7 +326,10 @@ async function runHousekeeping(env: Env, ctx: ExecutionContext, correlation: str
          WHERE state = 'AUTHORIZATION_PENDING'
            AND id IN (
              SELECT batch_id FROM authorization_challenges
-              WHERE id = ANY(${uuidSet(sql, abandoned.map((a) => a.id))})
+              WHERE id = ANY(${uuidSet(
+                sql,
+                abandoned.map((a) => a.id),
+              )})
            )
       `;
     }

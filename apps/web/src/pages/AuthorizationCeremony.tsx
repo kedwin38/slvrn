@@ -21,12 +21,16 @@
 import { useEffect, useState } from 'react';
 import { formatCents } from '@solvaren/core';
 import { api, ApiError, type CeremonyResponse } from '../lib/api.js';
-import { Amount, Notice, Modal } from '../components/primitives.js';
+import { Notice, Modal } from '../components/primitives.js';
 
 interface Props {
   batchId: string;
   onClose: () => void;
-  onReleased: (summary: { batchReference: string; instructionsQueued: number; message: string }) => void;
+  onReleased: (summary: {
+    batchReference: string;
+    instructionsQueued: number;
+    message: string;
+  }) => void;
 }
 
 type Phase = 'loading' | 'review' | 'signing' | 'releasing' | 'error';
@@ -43,7 +47,7 @@ export function AuthorizationCeremony({ batchId, onClose, onReleased }: Props) {
   // ---- Open the ceremony ---------------------------------------------------
   useEffect(() => {
     let cancelled = false;
-    (async () => {
+    void (async () => {
       try {
         const result = await api.authorization.begin(batchId);
         if (cancelled) return;
@@ -206,13 +210,16 @@ export function AuthorizationCeremony({ batchId, onClose, onReleased }: Props) {
               <span className="amount-currency" aria-hidden="true">
                 KES
               </span>
-              <span aria-label={`${formatCents(ceremony.manifest.totalAmountCents)} Kenyan shillings`}>
+              <span
+                aria-label={`${formatCents(ceremony.manifest.totalAmountCents)} Kenyan shillings`}
+              >
                 {formatCents(ceremony.manifest.totalAmountCents)}
               </span>
             </div>
             <div className="ceremony-amount-detail">
-              to <strong>{ceremony.manifest.recipientCount.toLocaleString('en-KE')}</strong> recipients ·
-              approval {ceremony.manifest.approvalId} · batch version {ceremony.manifest.batchVersion}
+              to <strong>{ceremony.manifest.recipientCount.toLocaleString('en-KE')}</strong>{' '}
+              recipients · approval {ceremony.manifest.approvalId} · batch version{' '}
+              {ceremony.manifest.batchVersion}
             </div>
           </div>
 
@@ -225,8 +232,8 @@ export function AuthorizationCeremony({ batchId, onClose, onReleased }: Props) {
 
             {expired && (
               <Notice tone="warning" live="assertive">
-                This authorization challenge has expired. Close this dialog and start again — nothing
-                has been released.
+                This authorization challenge has expired. Close this dialog and start again —
+                nothing has been released.
               </Notice>
             )}
 
@@ -260,7 +267,8 @@ export function AuthorizationCeremony({ batchId, onClose, onReleased }: Props) {
                   ))}
                   {ceremony.risk.signals.length > 8 && (
                     <p className="small muted">
-                      {ceremony.risk.signals.length - 8} further findings are listed on the batch page.
+                      {ceremony.risk.signals.length - 8} further findings are listed on the batch
+                      page.
                     </p>
                   )}
                 </div>
@@ -383,7 +391,9 @@ export function AuthorizationCeremony({ batchId, onClose, onReleased }: Props) {
  */
 async function requestAssertion(challengeBase64Url: string): Promise<unknown> {
   if (!('credentials' in navigator) || !window.PublicKeyCredential) {
-    throw new Error('This browser does not support security keys, which are required for payment release.');
+    throw new Error(
+      'This browser does not support security keys, which are required for payment release.',
+    );
   }
 
   const challenge = base64UrlToBuffer(challengeBase64Url);
@@ -414,7 +424,10 @@ async function requestAssertion(challengeBase64Url: string): Promise<unknown> {
 }
 
 function base64UrlToBuffer(value: string): ArrayBuffer {
-  const padded = value.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(value.length / 4) * 4, '=');
+  const padded = value
+    .replace(/-/g, '+')
+    .replace(/_/g, '/')
+    .padEnd(Math.ceil(value.length / 4) * 4, '=');
   const binary = atob(padded);
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);

@@ -18,6 +18,7 @@
  */
 
 import postgres from 'postgres';
+import type { Sql } from './db/client.js';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type {
@@ -46,7 +47,13 @@ export class FakeQueue<T> {
   }
 
   async send(body: T): Promise<void> {
-    this.messages.push({ body, attempts: 0, acked: false, retried: false, retryDelaySeconds: null });
+    this.messages.push({
+      body,
+      attempts: 0,
+      acked: false,
+      retried: false,
+      retryDelaySeconds: null,
+    });
   }
 
   async sendBatch(batch: { body: T }[]): Promise<void> {
@@ -119,7 +126,9 @@ export class FakeR2 {
     return { text: async () => object.body };
   }
 
-  async head(key: string): Promise<{ size: number; customMetadata: Record<string, string> } | null> {
+  async head(
+    key: string,
+  ): Promise<{ size: number; customMetadata: Record<string, string> } | null> {
     const object = this.objects.get(key);
     if (!object) return null;
     return { size: object.body.length, customMetadata: object.metadata };
@@ -155,7 +164,7 @@ class FakeRateLimiterNamespace {
 
 export interface TestEnvironment {
   env: Env;
-  sql: postgres.Sql<{}>;
+  sql: Sql;
   queues: {
     payments: FakeQueue<PaymentQueueMessage>;
     callbacks: FakeQueue<CallbackQueueMessage>;
@@ -175,7 +184,14 @@ export interface HarnessOptions {
   databaseName?: string;
 }
 
-const MIGRATIONS_DIR = join(import.meta.dirname ?? process.cwd(), '..', '..', '..', 'db', 'migrations');
+const MIGRATIONS_DIR = join(
+  import.meta.dirname ?? process.cwd(),
+  '..',
+  '..',
+  '..',
+  'db',
+  'migrations',
+);
 
 /**
  * Create a disposable database with the full schema applied.
@@ -184,12 +200,15 @@ const MIGRATIONS_DIR = join(import.meta.dirname ?? process.cwd(), '..', '..', '.
  * immutability triggers make audit and transaction rows impossible to clean up, which is
  * exactly the property under test.
  */
-export async function createTestEnvironment(options: HarnessOptions = {}): Promise<TestEnvironment> {
+export async function createTestEnvironment(
+  options: HarnessOptions = {},
+): Promise<TestEnvironment> {
   const adminUrl =
     options.databaseUrl ??
     process.env.SOLVAREN_TEST_DATABASE_URL ??
     'postgres://postgres@localhost:5433/postgres';
-  const databaseName = options.databaseName ?? `solvaren_it_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
+  const databaseName =
+    options.databaseName ?? `solvaren_it_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
 
   const admin = postgres(adminUrl, { max: 1, onnotice: () => {} });
   await admin.unsafe(`CREATE DATABASE ${databaseName}`);
@@ -198,7 +217,9 @@ export async function createTestEnvironment(options: HarnessOptions = {}): Promi
   const databaseUrl = adminUrl.replace(/\/[^/]*$/, `/${databaseName}`);
   const sql = postgres(databaseUrl, { max: 2, onnotice: () => {}, transform: { undefined: null } });
 
-  for (const file of readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith('.sql')).sort()) {
+  for (const file of readdirSync(MIGRATIONS_DIR)
+    .filter((f) => f.endsWith('.sql'))
+    .sort()) {
     await sql.unsafe(readFileSync(join(MIGRATIONS_DIR, file), 'utf8'));
   }
 
@@ -211,14 +232,25 @@ export async function createTestEnvironment(options: HarnessOptions = {}): Promi
   const r2 = new FakeR2();
   const rateLimiter = new FakeRateLimiterNamespace();
 
+  // The fakes implement the slice of each Cloudflare binding that SOLVAREN actually calls,
+  // not the full interface — `Queue.metrics` and most of `R2Bucket` have no bearing on
+  // whether a payment is released twice. The widening happens here, in named bindings
+  // rather than inline, so each one is a single reviewable statement.
+  const paymentQueue = queues.payments as unknown as Queue<PaymentQueueMessage>;
+  const callbackQueue = queues.callbacks as unknown as Queue<CallbackQueueMessage>;
+  const reconciliationQueue = queues.reconciliation as unknown as Queue<ReconciliationQueueMessage>;
+  const backupQueue = queues.backups as unknown as Queue<BackupQueueMessage>;
+  const artifacts = r2 as unknown as R2Bucket;
+  const rateLimiterNamespace = rateLimiter as unknown as DurableObjectNamespace;
+
   const env = {
     HYPERDRIVE: { connectionString: databaseUrl } as Hyperdrive,
-    PAYMENT_QUEUE: queues.payments as unknown as Queue<PaymentQueueMessage>,
-    CALLBACK_QUEUE: queues.callbacks as unknown as Queue<CallbackQueueMessage>,
-    RECONCILIATION_QUEUE: queues.reconciliation as unknown as Queue<ReconciliationQueueMessage>,
-    BACKUP_QUEUE: queues.backups as unknown as Queue<BackupQueueMessage>,
-    ARTIFACTS: r2 as unknown as R2Bucket,
-    RATE_LIMITER: rateLimiter as unknown as DurableObjectNamespace,
+    PAYMENT_QUEUE: paymentQueue,
+    CALLBACK_QUEUE: callbackQueue,
+    RECONCILIATION_QUEUE: reconciliationQueue,
+    BACKUP_QUEUE: backupQueue,
+    ARTIFACTS: artifacts,
+    RATE_LIMITER: rateLimiterNamespace,
     SESSION_SIGNING_KEY: 'test-session-signing-key-0123456789abcdef',
     SECRET_ENCRYPTION_KEY: 'test-secret-encryption-key-0123456789abcdef',
     CALLBACK_SHARED_SECRET: 'test-callback-shared-secret-0123456789',
@@ -301,6 +333,26 @@ export interface ScriptedDaraja {
  * exact number of requests that reached the provider, which is the only measurement that
  * actually matters for "did we pay twice".
  */
+/**
+ * Read a scripted request body as JSON.
+ *
+ * `RequestInit['body']` is a `BodyInit`, which includes Blob, FormData and streams. Passing
+ * one of those to `String()` yields "[object Object]", and the resulting parse error points
+ * at the harness rather than at the caller that sent the wrong shape. The Daraja client
+ * sends a JSON string and nothing else, so anything else is a bug worth failing on loudly.
+ */
+function scriptedJsonBody(init?: RequestInit): Record<string, unknown> {
+  const body = init?.body;
+  if (body === undefined || body === null) return {};
+  if (typeof body !== 'string') {
+    throw new Error(
+      `Daraja script received a non-string request body (${Object.prototype.toString.call(body)}). ` +
+        'The Daraja client is expected to send JSON text.',
+    );
+  }
+  return JSON.parse(body) as Record<string, unknown>;
+}
+
 export function scriptDaraja(script: DarajaScript = {}): ScriptedDaraja {
   const submissions: Record<string, unknown>[] = [];
   const statusQueries: Record<string, unknown>[] = [];
@@ -310,19 +362,25 @@ export function scriptDaraja(script: DarajaScript = {}): ScriptedDaraja {
   const json = (body: unknown, status = 200) =>
     new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 
-  const impl = (async (url: string | URL | Request, init?: RequestInit): Promise<Response> => {
+  const impl: typeof fetch = async (
+    url: string | URL | Request,
+    init?: RequestInit,
+  ): Promise<Response> => {
     const href = typeof url === 'string' ? url : url instanceof URL ? url.href : url.url;
 
     if (href.includes('/oauth/')) {
       tokenCalls += 1;
       if (script.token?.ok === false) {
-        return json({ requestId: 'r', errorCode: '401.002.01', errorMessage: 'Invalid credentials' }, 401);
+        return json(
+          { requestId: 'r', errorCode: '401.002.01', errorMessage: 'Invalid credentials' },
+          401,
+        );
       }
       return json({ access_token: 'test-token', expires_in: '3599' });
     }
 
     if (href.includes('/b2c/')) {
-      const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+      const body = scriptedJsonBody(init);
       const behaviour = script.b2c?.[b2cIndex] ?? { kind: 'accept' as const };
       b2cIndex += 1;
 
@@ -344,7 +402,10 @@ export function scriptDaraja(script: DarajaScript = {}): ScriptedDaraja {
         );
       }
       if (behaviour.kind === 'server-error') {
-        return json({ requestId: 'r', errorCode: '500.003.1001', errorMessage: 'Internal Server Error' }, 500);
+        return json(
+          { requestId: 'r', errorCode: '500.003.1001', errorMessage: 'Internal Server Error' },
+          500,
+        );
       }
 
       return json({
@@ -356,7 +417,7 @@ export function scriptDaraja(script: DarajaScript = {}): ScriptedDaraja {
     }
 
     if (href.includes('/transactionstatus/')) {
-      statusQueries.push(JSON.parse(String(init?.body ?? '{}')));
+      statusQueries.push(scriptedJsonBody(init));
       if (script.statusQuery?.kind === 'reject') {
         return json({ requestId: 'r', errorCode: '500.003.1001', errorMessage: 'error' }, 500);
       }
@@ -377,7 +438,7 @@ export function scriptDaraja(script: DarajaScript = {}): ScriptedDaraja {
     }
 
     return json({ error: 'unexpected endpoint' }, 404);
-  }) as unknown as typeof fetch;
+  };
 
   return {
     fetch: impl,

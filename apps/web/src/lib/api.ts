@@ -131,7 +131,9 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
 }
 
 /** Download a generated file, preserving the server-supplied filename. */
-export async function downloadCsv(path: string): Promise<{ blob: Blob; filename: string; truncated: boolean }> {
+export async function downloadCsv(
+  path: string,
+): Promise<{ blob: Blob; filename: string; truncated: boolean }> {
   const response = await fetch(`${API_BASE}${path}`, {
     headers: {
       Accept: 'text/csv',
@@ -151,7 +153,11 @@ export async function downloadCsv(path: string): Promise<{ blob: Blob; filename:
     }
     throw new ApiError(
       response.status,
-      shape ?? { code: 'EXPORT_FAILED', category: 'INTERNAL', message: 'The export could not be generated.' },
+      shape ?? {
+        code: 'EXPORT_FAILED',
+        category: 'INTERNAL',
+        message: 'The export could not be generated.',
+      },
     );
   }
 
@@ -293,7 +299,12 @@ export interface CeremonyResponse {
     batchVersion: number;
   };
   acknowledgementsRequired: string[];
-  risk: { score: number; band: string; signals: RiskSignalView[]; requiresAcknowledgement: boolean };
+  risk: {
+    score: number;
+    band: string;
+    signals: RiskSignalView[];
+    requiresAcknowledgement: boolean;
+  };
   confirmation: {
     headline: string;
     batchReference: string;
@@ -315,19 +326,86 @@ export interface BatchSummary {
 // Endpoints
 // ---------------------------------------------------------------------------
 
+/**
+ * The backup configuration as the server is willing to describe it.
+ *
+ * Credential fields arrive already masked (BAK-002) and are typed as the masked strings
+ * they are, so there is no shape in this file that could hold a plaintext secret.
+ */
+export interface BackupConfigurationView {
+  configurationId: string;
+  providerLabel: string;
+  bucket: string;
+  pathPrefix: string | null;
+  region: string | null;
+  endpoint: string | null;
+  accessKeyMasked: string;
+  secretKeyMasked: string;
+  encryptionMode: string;
+  status: string;
+  lastTestAt: string | null;
+  lastTestOk: boolean | null;
+  lastTestMessage: string | null;
+  scheduleEnabled: boolean;
+  scheduleCron: string | null;
+  scheduleTimezone: string | null;
+  retentionMaxCount: number | null;
+  lastScheduledRunAt: string | null;
+  nextScheduledRunAt: string | null;
+  suspended: boolean;
+  suspensionReason: string | null;
+  consecutiveFailures: number;
+}
+
+/**
+ * A single backup attempt.
+ *
+ * `errorMessage` is typed rather than left as `unknown` deliberately: BAK-008 requires a
+ * failure to be shown as a failure, and an untyped value rendered through `String()` will
+ * silently present an operator with "[object Object]" in place of the reason a backup
+ * failed.
+ */
+export interface BackupAttemptView {
+  attemptReference: string;
+  trigger: string;
+  status: string;
+  startedAt: string;
+  endedAt: string | null;
+  sizeBytes: number | null;
+  checksum: string | null;
+  errorMessage: string | null;
+  retentionDeletedCount: number | null;
+  retentionComplete: boolean | null;
+}
+
 export const api = {
   auth: {
     login: (email: string, password: string) =>
       request<
-        | { stage: 'AUTHENTICATED'; token: string; expiresAt: string; user: SessionResponse['user'] }
-        | { stage: 'WEBAUTHN_REQUIRED'; ticket: string; options: PublicKeyCredentialRequestOptionsJSON; level: string }
+        | {
+            stage: 'AUTHENTICATED';
+            token: string;
+            expiresAt: string;
+            user: SessionResponse['user'];
+          }
+        | {
+            stage: 'WEBAUTHN_REQUIRED';
+            ticket: string;
+            options: PublicKeyCredentialRequestOptionsJSON;
+            level: string;
+          }
       >('/auth/login', { method: 'POST', body: { email, password, deviceId: deviceId() } }),
 
     completeWebAuthn: (ticket: string, response: unknown) =>
-      request<{ stage: 'AUTHENTICATED'; token: string; expiresAt: string; user: SessionResponse['user'] }>(
-        '/auth/webauthn/authenticate',
-        { method: 'POST', body: { ticket, response, deviceId: deviceId() } },
-      ),
+      request<{
+        stage: 'AUTHENTICATED';
+        token: string;
+        expiresAt: string;
+        user: SessionResponse['user'];
+      }>('/auth/webauthn/authenticate', {
+        method: 'POST',
+        body: { ticket, response, deviceId: deviceId() },
+      }),
 
     session: () => request<SessionResponse>('/auth/session'),
     logout: () => request<{ signedOut: boolean }>('/auth/logout', { method: 'POST' }),
@@ -340,7 +418,13 @@ export const api = {
     detail: (id: string) =>
       request<{
         transaction: TransactionRow;
-        activity: { action: string; outcome: string; occurred_at: string; actor_id: string; detail: unknown }[];
+        activity: {
+          action: string;
+          outcome: string;
+          occurred_at: string;
+          actor_id: string;
+          detail: unknown;
+        }[];
         reconciliationCases: {
           case_reference: string;
           state: string;
@@ -374,7 +458,8 @@ export const api = {
   },
 
   batches: {
-    list: (state?: string) => request<{ batches: BatchSummary[] }>(`/batches${state ? `?state=${state}` : ''}`),
+    list: (state?: string) =>
+      request<{ batches: BatchSummary[] }>(`/batches${state ? `?state=${state}` : ''}`),
     detail: (id: string) =>
       request<{
         batch: {
@@ -488,8 +573,8 @@ export const api = {
   backups: {
     overview: () =>
       request<{
-        configuration: Record<string, unknown> | null;
-        latestResult: Record<string, unknown> | null;
+        configuration: BackupConfigurationView | null;
+        latestResult: BackupAttemptView | null;
         history: {
           attemptReference: string;
           trigger: string;
@@ -503,9 +588,12 @@ export const api = {
         restoreValidationNote: string;
       }>('/admin/backups'),
     run: () =>
-      request<{ accepted: boolean; attemptReference: string; message: string }>('/admin/backups/run', {
-        method: 'POST',
-      }),
+      request<{ accepted: boolean; attemptReference: string; message: string }>(
+        '/admin/backups/run',
+        {
+          method: 'POST',
+        },
+      ),
   },
 };
 

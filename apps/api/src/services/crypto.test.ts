@@ -43,7 +43,9 @@ describe('Argon2id password hashing (§7.2)', () => {
 
   it('bounds input length in both directions', async () => {
     await expect(hashPassword('short')).rejects.toMatchObject({ code: 'PASSWORD_TOO_SHORT' });
-    await expect(hashPassword('a'.repeat(2000))).rejects.toMatchObject({ code: 'PASSWORD_TOO_LONG' });
+    await expect(hashPassword('a'.repeat(2000))).rejects.toMatchObject({
+      code: 'PASSWORD_TOO_LONG',
+    });
     // An oversized candidate is refused without doing the memory-hard work.
     const hash = await hashPassword('correct horse battery staple');
     expect(await verifyPassword('a'.repeat(2000), hash)).toBe(false);
@@ -119,7 +121,9 @@ describe('timing-safe comparison', () => {
 describe('recovery codes (§8.3 — no SMS)', () => {
   it('generates unique, readable, grouped codes', () => {
     const code = generateRecoveryCode();
-    expect(code).toMatch(/^[0-9A-HJKMNP-TV-Z]{5}-[0-9A-HJKMNP-TV-Z]{5}-[0-9A-HJKMNP-TV-Z]{5}-[0-9A-HJKMNP-TV-Z]{5}$/);
+    expect(code).toMatch(
+      /^[0-9A-HJKMNP-TV-Z]{5}-[0-9A-HJKMNP-TV-Z]{5}-[0-9A-HJKMNP-TV-Z]{5}-[0-9A-HJKMNP-TV-Z]{5}$/,
+    );
     // Crockford base32 excludes I, L, O and U so codes cannot be misread aloud.
     expect(code).not.toMatch(/[ILOU]/);
     expect(new Set(Array.from({ length: 200 }, generateRecoveryCode)).size).toBe(200);
@@ -146,7 +150,9 @@ describe('secret envelope encryption (§8.4)', () => {
 
   it('refuses to decrypt under the wrong key', async () => {
     const envelope = await encryptSecret('consumer-secret', masterKey);
-    await expect(decryptSecret(envelope, 'wrong-master-key-here-000000000000')).rejects.toMatchObject({
+    await expect(
+      decryptSecret(envelope, 'wrong-master-key-here-000000000000'),
+    ).rejects.toMatchObject({
       code: 'SECRET_TAMPERED',
     });
   });
@@ -154,11 +160,16 @@ describe('secret envelope encryption (§8.4)', () => {
   it('detects tampering through the AES-GCM authentication tag', async () => {
     const envelope = await encryptSecret('consumer-secret', masterKey);
     // Flip a character in the ciphertext body, past the 16-char IV prefix.
-    const tampered = envelope.slice(0, 20) + (envelope[20] === 'A' ? 'B' : 'A') + envelope.slice(21);
-    await expect(decryptSecret(tampered, masterKey)).rejects.toMatchObject({ code: 'SECRET_TAMPERED' });
+    const tampered =
+      envelope.slice(0, 20) + (envelope[20] === 'A' ? 'B' : 'A') + envelope.slice(21);
+    await expect(decryptSecret(tampered, masterKey)).rejects.toMatchObject({
+      code: 'SECRET_TAMPERED',
+    });
   });
 
   it('rejects a truncated envelope', async () => {
-    await expect(decryptSecret('AAAA', masterKey)).rejects.toMatchObject({ code: 'SECRET_MALFORMED' });
+    await expect(decryptSecret('AAAA', masterKey)).rejects.toMatchObject({
+      code: 'SECRET_MALFORMED',
+    });
   });
 });

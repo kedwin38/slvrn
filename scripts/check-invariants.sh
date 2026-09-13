@@ -210,6 +210,37 @@ fi
 
 # ---------------------------------------------------------------------------
 echo ""
+echo "The source tree holds no compiled output"
+# ---------------------------------------------------------------------------
+
+# A `tsc` invocation that emits into `src` leaves a .js beside every .ts. Node and the
+# bundler will then happily resolve the stale compiled copy instead of the source, so a
+# security fix can be edited, committed and reviewed while the build keeps running the old
+# code. This happened here: apps/web's typecheck script passed `--noEmit false`.
+emitted="$(find packages apps -path '*/node_modules' -prune -o -path '*/dist' -prune -o \
+  \( -name '*.js' -o -name '*.d.ts' -o -name '*.js.map' -o -name '*.d.ts.map' \) -print 2>/dev/null \
+  | while read -r f; do
+      base="$f"
+      base="${base%.js}"; base="${base%.d.ts}"
+      base="${base%.js.map}"; base="${base%.d.ts.map}"
+      if [ -f "$base.ts" ] || [ -f "$base.tsx" ]; then echo "$f"; fi
+    done)"
+if [ -z "$emitted" ]; then
+  pass "no compiled artifact sits beside a TypeScript source"
+else
+  fail "compiled output found in the source tree (a stale copy can shadow the source):"
+  echo "$emitted" | sed 's/^/      /'
+fi
+
+# The script that caused it must stay non-emitting.
+if grep -qE '"typecheck".*--noEmit false' apps/web/package.json 2>/dev/null; then
+  fail "apps/web typecheck forces emission; it must run with --noEmit"
+else
+  pass "apps/web typecheck does not force emission"
+fi
+
+# ---------------------------------------------------------------------------
+echo ""
 if [ "$failures" -eq 0 ]; then
   printf '\033[32m%d invariants hold.\033[0m\n\n' "$checks"
   exit 0

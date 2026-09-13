@@ -7,9 +7,8 @@ import { writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
-const { listFailureReasons, FAILURE_DICTIONARY_VERSION } = await import(
-  '../packages/core/src/failure-reasons.ts'
-);
+const { listFailureReasons, FAILURE_DICTIONARY_VERSION } =
+  await import('../packages/core/src/failure-reasons.ts');
 
 const sqlEscape = (s) => s.replace(/'/g, "''");
 const entries = listFailureReasons().filter((e) => e.code !== '0');

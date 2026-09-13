@@ -177,7 +177,11 @@ export function assessBatchRisk(input: RiskInput): RiskAssessment {
         summary: h
           ? `First payment to a recipient added ${Math.round(ageHours)} hours ago, for KES ${formatCents(i.amountCents)}.`
           : `First payment to this recipient, for KES ${formatCents(i.amountCents)}.`,
-        evidence: { recipientId: i.recipientId, amount: formatCents(i.amountCents), recipientAgeHours: Math.round(ageHours) },
+        evidence: {
+          recipientId: i.recipientId,
+          amount: formatCents(i.amountCents),
+          recipientAgeHours: Math.round(ageHours),
+        },
         instructionIds: [i.instructionId],
       });
       continue;
@@ -258,7 +262,7 @@ export function assessBatchRisk(input: RiskInput): RiskAssessment {
     signals.push({
       type: 'UNUSUAL_TIMING',
       severity: 'LOW',
-      summary: 'This batch is being processed outside the organization\'s normal business hours.',
+      summary: "This batch is being processed outside the organization's normal business hours.",
       evidence: { hourUtc, businessHoursUtc: policy.businessHoursUtc },
       instructionIds: [],
     });

@@ -85,7 +85,7 @@ async function ingest(c: Context<AppContext>, kind: CallbackKind): Promise<Respo
             ${organizationId}, 'CALLBACK_AUTH_FAILED', 'CRITICAL',
             ${'A provider callback was received with an invalid or missing shared secret'},
             ${c.get('securityContext').ip},
-            ${tx.json({ kind, bodyBytes: rawBody.length } as never)}
+            ${tx.json({ kind, bodyBytes: rawBody.length })}
           )
         `;
       }).catch(() => {
@@ -106,7 +106,7 @@ async function ingest(c: Context<AppContext>, kind: CallbackKind): Promise<Respo
           INSERT INTO security_events (organization_id, event_type, severity, description, ip, detail)
           VALUES (${organizationId}, 'CALLBACK_MALFORMED', 'WARNING',
                   ${'A provider callback body was not valid JSON'}, ${c.get('securityContext').ip},
-                  ${tx.json({ kind } as never)})
+                  ${tx.json({ kind })})
         `;
       });
       return;

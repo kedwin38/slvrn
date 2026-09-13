@@ -25,7 +25,8 @@ const replaceInstruction = (
   input: ManifestInput,
   instructionId: string,
   replacement: ManifestInstruction,
-): ManifestInstruction[] => input.instructions.map((i) => (i.instructionId === instructionId ? replacement : i));
+): ManifestInstruction[] =>
+  input.instructions.map((i) => (i.instructionId === instructionId ? replacement : i));
 
 const baseInput = (): ManifestInput => ({
   organizationId: 'org-1',
@@ -69,14 +70,22 @@ describe('manifest canonicalization', () => {
       'amount change of one cent',
       (i: ManifestInput): ManifestInput => ({
         ...i,
-        instructions: replaceInstruction(i, 'ins-001', instruction('ins-001', '254712345678', 45_500_01)),
+        instructions: replaceInstruction(
+          i,
+          'ins-001',
+          instruction('ins-001', '254712345678', 45_500_01),
+        ),
       }),
     ],
     [
       'recipient MSISDN change',
       (i: ManifestInput): ManifestInput => ({
         ...i,
-        instructions: replaceInstruction(i, 'ins-001', instruction('ins-001', '254712345679', 45_500_00)),
+        instructions: replaceInstruction(
+          i,
+          'ins-001',
+          instruction('ins-001', '254712345679', 45_500_00),
+        ),
       }),
     ],
     [
@@ -116,7 +125,10 @@ describe('manifest canonicalization', () => {
   it('refuses duplicate instruction ids', () => {
     const dup = {
       ...baseInput(),
-      instructions: [instruction('ins-001', '254712345678', 100_00), instruction('ins-001', '254712345678', 100_00)],
+      instructions: [
+        instruction('ins-001', '254712345678', 100_00),
+        instruction('ins-001', '254712345678', 100_00),
+      ],
     };
     expect(() => canonicalizeManifest(dup)).toThrow(/appears twice/);
   });
@@ -168,8 +180,18 @@ describe('authorization challenge binding (§7.5, §23)', () => {
 
   it('a different nonce produces a different challenge for the same manifest', async () => {
     const manifest = await buildManifest(baseInput());
-    const c1 = await buildChallenge({ manifest, nonce: randomToken(32), expiresAt: now + 1000, authorizerUserId: 'u' });
-    const c2 = await buildChallenge({ manifest, nonce: randomToken(32), expiresAt: now + 1000, authorizerUserId: 'u' });
+    const c1 = await buildChallenge({
+      manifest,
+      nonce: randomToken(32),
+      expiresAt: now + 1000,
+      authorizerUserId: 'u',
+    });
+    const c2 = await buildChallenge({
+      manifest,
+      nonce: randomToken(32),
+      expiresAt: now + 1000,
+      authorizerUserId: 'u',
+    });
     expect(c1.challengeHash).not.toBe(c2.challengeHash);
   });
 

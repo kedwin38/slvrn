@@ -60,7 +60,7 @@ node --experimental-strip-types scripts/restore-snapshot.mjs \
 
 The loader inserts in dependency order and **disables the immutability triggers for the
 duration of the load** — a restore is the one legitimate reason to do so, because the
-triggers exist to stop the *application* rewriting history, not to stop a recovery. It
+triggers exist to stop the _application_ rewriting history, not to stop a recovery. It
 re-enables them before exiting, and fails loudly if it cannot.
 
 ### 5. Verify the restore is usable, not merely loaded
@@ -125,9 +125,9 @@ disaster-recovery evidence. An auditor will ask when the last successful restore
 
 The Backups screen shows failures as failures. Common causes:
 
-| Symptom | Cause | Action |
-|---|---|---|
-| `The storage target rejected the credentials` | Rotated or revoked access key | Reconfigure the target; five consecutive failures suspend the schedule |
-| Status `MISSED` | The scheduled window passed without a run | Check whether the Worker cron is firing; run a manual backup now |
-| `SUCCESS` with `retentionComplete: false` | Some old objects could not be deleted | Storage permissions; the retained count is not guaranteed until resolved |
-| Repeated failures, then suspension | Threshold reached | Deliberate. Correct the configuration, which clears the suspension |
+| Symptom                                       | Cause                                     | Action                                                                   |
+| --------------------------------------------- | ----------------------------------------- | ------------------------------------------------------------------------ |
+| `The storage target rejected the credentials` | Rotated or revoked access key             | Reconfigure the target; five consecutive failures suspend the schedule   |
+| Status `MISSED`                               | The scheduled window passed without a run | Check whether the Worker cron is firing; run a manual backup now         |
+| `SUCCESS` with `retentionComplete: false`     | Some old objects could not be deleted     | Storage permissions; the retained count is not guaranteed until resolved |
+| Repeated failures, then suspension            | Threshold reached                         | Deliberate. Correct the configuration, which clears the suspension       |

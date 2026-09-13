@@ -257,7 +257,7 @@ export async function runBackup(sql: Sql, env: Env, message: BackupQueueMessage)
         VALUES (
           ${message.organizationId}, 'BACKUP_FAILED', 'WARNING',
           ${'A database backup failed'},
-          ${tx.json({ attemptReference, error: messageText, consecutiveFailures: failures[0]?.consecutive_failures } as never)}
+          ${tx.json({ attemptReference, error: messageText, consecutiveFailures: failures[0]?.consecutive_failures })}
         )
       `;
       await writeAuditEvent(tx, {
@@ -419,7 +419,9 @@ async function buildLogicalSnapshot(sql: Sql, organizationId: string): Promise<S
                   `SELECT * FROM failure_reason_map WHERE organization_id = $1 OR organization_id IS NULL`,
                   [organizationId],
                 )
-              : await tx.unsafe(`SELECT * FROM ${table} WHERE organization_id = $1`, [organizationId]);
+              : await tx.unsafe(`SELECT * FROM ${table} WHERE organization_id = $1`, [
+                  organizationId,
+                ]);
 
       const sanitized = (rows as Record<string, unknown>[]).map((row) => {
         const copy = { ...row };

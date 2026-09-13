@@ -19,9 +19,13 @@ export interface NormalizedResultParameters {
 }
 
 /** Collapse Daraja's object-or-array shapes into a plain record. */
-export function normalizeResultParameters(callback: DarajaResultCallback): NormalizedResultParameters {
+export function normalizeResultParameters(
+  callback: DarajaResultCallback,
+): NormalizedResultParameters {
   const out: NormalizedResultParameters = {};
-  const collect = (entry: { Key: string; Value?: string | number } | { Key: string; Value?: string | number }[]) => {
+  const collect = (
+    entry: { Key: string; Value?: string | number } | { Key: string; Value?: string | number }[],
+  ) => {
     const list = Array.isArray(entry) ? entry : [entry];
     for (const item of list) {
       if (item && typeof item.Key === 'string') out[item.Key] = item.Value;
@@ -95,7 +99,14 @@ export function parseDarajaTimestamp(value: string | number | undefined): string
 }
 
 /** East Africa Time is UTC+3 year-round — Kenya observes no daylight saving. */
-function eatToIso(y: number, m: number, d: number, h: number, min: number, s: number): string | null {
+function eatToIso(
+  y: number,
+  m: number,
+  d: number,
+  h: number,
+  min: number,
+  s: number,
+): string | null {
   const ms = Date.UTC(y, m - 1, d, h - 3, min, s);
   if (Number.isNaN(ms)) return null;
   return new Date(ms).toISOString();
@@ -112,7 +123,8 @@ export function parseB2cResult(payload: unknown): ParsedB2cResult {
     resultDescription: result.ResultDesc?.trim() ?? '',
     originatorConversationId: toStringValue(result.OriginatorConversationID),
     conversationId: toStringValue(result.ConversationID),
-    transactionReceipt: toStringValue(params.TransactionReceipt) ?? toStringValue(result.TransactionID),
+    transactionReceipt:
+      toStringValue(params.TransactionReceipt) ?? toStringValue(result.TransactionID),
     transactionAmountCents: toCents(params.TransactionAmount),
     receiverPartyPublicName: toStringValue(params.ReceiverPartyPublicName),
     completedAt: parseDarajaTimestamp(params.TransactionCompletedDateTime),
@@ -153,7 +165,8 @@ export function parseTransactionStatusResult(payload: unknown): ParsedTransactio
     resultCode: String(result.ResultCode).trim(),
     resultDescription: result.ResultDesc?.trim() ?? '',
     originatorConversationId:
-      toStringValue(params.OriginatorConversationID) ?? toStringValue(result.OriginatorConversationID),
+      toStringValue(params.OriginatorConversationID) ??
+      toStringValue(result.OriginatorConversationID),
     conversationId: toStringValue(params.ConversationID) ?? toStringValue(result.ConversationID),
     receiptNumber: toStringValue(params.ReceiptNo) ?? toStringValue(result.TransactionID),
     transactionStatus: toStringValue(params.TransactionStatus),
@@ -173,7 +186,9 @@ export function parseTransactionStatusResult(payload: unknown): ParsedTransactio
  * is still working. Treating them as failure would mark a paid employee unpaid, which is
  * why they map to `PENDING` and leave the transaction in reconciliation.
  */
-export function interpretTransactionStatus(status: string | null): 'SUCCESS' | 'FAILED' | 'PENDING' | 'UNKNOWN' {
+export function interpretTransactionStatus(
+  status: string | null,
+): 'SUCCESS' | 'FAILED' | 'PENDING' | 'UNKNOWN' {
   if (!status) return 'UNKNOWN';
   switch (status.trim().toLowerCase()) {
     case 'completed':
@@ -195,7 +210,9 @@ export function interpretTransactionStatus(status: string | null): 'SUCCESS' | '
  * Parse the `AccountBalance` result parameter:
  * `Working Account|KES|700000.00|700000.00|0.00|0.00&Utility Account|KES|228037.00|…`
  */
-export function parseAccountBalances(raw: string | number | undefined): OrganizationAccountBalance[] {
+export function parseAccountBalances(
+  raw: string | number | undefined,
+): OrganizationAccountBalance[] {
   const s = toStringValue(raw);
   if (s === null) return [];
   const accounts: OrganizationAccountBalance[] = [];
