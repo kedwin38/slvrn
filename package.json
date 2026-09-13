@@ -18,13 +18,14 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "db:migrate": "node scripts/migrate.mjs",
-    "verify": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm db:test",
+    "verify": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm check:invariants && pnpm test && pnpm db:test",
     "db:generate-seed": "node --experimental-strip-types scripts/generate-failure-seed.mjs",
     "db:test": "bash scripts/db-test.sh",
     "test:integration": "SOLVAREN_TEST_DATABASE_URL=${SOLVAREN_TEST_DATABASE_URL:-postgres://postgres@localhost:5433/postgres} vitest run apps/api/src/integration.test.ts",
     "db:up": "bash scripts/dev-postgres.sh start",
     "db:down": "bash scripts/dev-postgres.sh stop",
-    "ui:check": "pnpm --filter @solvaren/web build && node scripts/ui-check.mjs"
+    "ui:check": "pnpm --filter @solvaren/web build && node scripts/ui-check.mjs",
+    "check:invariants": "bash scripts/check-invariants.sh"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
@@ -40,5 +41,9 @@
     "onlyBuiltDependencies": [
       "esbuild"
     ]
+  },
+  "dependencies": {
+    "hash-wasm": "^4.12.0",
+    "postgres": "^3.4.9"
   }
 }

@@ -300,6 +300,7 @@ export async function enforceRetention(
      WHERE organization_id = ${message.organizationId}
        AND status = 'SUCCESS'
        AND object_key IS NOT NULL
+       AND object_retired_at IS NULL
      ORDER BY started_at DESC
      OFFSET ${config.retention_max_count}
   `;
@@ -312,13 +313,21 @@ export async function enforceRetention(
   for (const backup of surplus) {
     try {
       await env.ARTIFACTS.delete(backup.object_key);
-      // The attempt row is never deleted — it is the audit record that the backup existed
-      // and was retired. Only the object goes.
+      /*
+       * The attempt row is never deleted — it is the evidence that the backup existed and
+       * was retired — and the object key stays on it as the record of what was written.
+       * Only a marker is added.
+       *
+       * An earlier version set `object_key = NULL` here, which the
+       * `backup_success_requires_object` constraint rightly refuses: a SUCCESS attempt
+       * must name an object. The UPDATE failed, the error was swallowed as a retention
+       * failure, and the record went on claiming an object that storage no longer held.
+       * A dedicated marker keeps the constraint honest and the history accurate.
+       */
       await sql`
         UPDATE backup_attempts
-           SET object_key = NULL,
-               error_message = ${'Object removed by retention policy'}
-         WHERE id = ${backup.id}
+           SET object_retired_at = now()
+         WHERE id = ${backup.id} AND object_retired_at IS NULL
       `;
       deleted += 1;
     } catch (err) {

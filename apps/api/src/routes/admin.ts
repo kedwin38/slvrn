@@ -495,10 +495,12 @@ adminRoutes.get('/backups', requireExactLevel('L3'), requirePermissions('admin:b
         error_message: string | null;
         retention_deleted_count: number;
         retention_complete: boolean;
+        object_retired_at: string | null;
       }[]
     >`
       SELECT attempt_reference, trigger_type, status, started_at, ended_at, size_bytes,
-             checksum, object_key, error_message, retention_deleted_count, retention_complete
+             checksum, object_key, error_message, retention_deleted_count, retention_complete,
+             object_retired_at
         FROM backup_attempts
        WHERE organization_id = ${actor.organizationId}
        ORDER BY started_at DESC
@@ -561,7 +563,10 @@ adminRoutes.get('/backups', requireExactLevel('L3'), requirePermissions('admin:b
         endedAt: a.ended_at,
         sizeBytes: a.size_bytes ? Number(a.size_bytes) : null,
         errorMessage: a.error_message,
-        objectRetained: a.object_key !== null,
+        // The object key is retained on the record as evidence of what was written; the
+        // retirement marker is what says whether it is still restorable.
+        objectRetained: a.object_key !== null && a.object_retired_at === null,
+        objectRetiredAt: a.object_retired_at,
       })),
       restoreValidationNote:
         'A backup that has never been restore-validated is not disaster-recovery proven. See docs/runbooks/backup-restore.md.',
