@@ -96,6 +96,30 @@ export async function requireLock(tx: Sql, namespace: string, id: string): Promi
   }
 }
 
+/*
+ * Binding lists of UUIDs.
+ *
+ * `fetch_types: false` on the connection saves a round trip per connection but disables the
+ * driver's array-OID inference, so a plain `${ids}::uuid[]` is serialised as a bare
+ * comma-joined string that PostgreSQL rejects as a malformed array literal. Passing the
+ * list as JSON and expanding it server-side is correct either way, handles the empty list,
+ * and keeps every value a bound parameter rather than interpolated text.
+ *
+ * Two helpers, because the two SQL positions need different things — using one for the
+ * other produces `uuid = uuid[]` or a syntax error, both of which are caught by the
+ * integration suite rather than in production.
+ */
+
+/** A *set* of uuids, for the subquery form: `WHERE id = ANY(${uuidSet(sql, ids)})`. */
+export function uuidSet(sql: Sql, ids: readonly string[]) {
+  return sql`SELECT jsonb_array_elements_text(${sql.json([...ids] as never)}::jsonb)::uuid`;
+}
+
+/** A `uuid[]` *value*, for a column: `VALUES (..., ${uuidArrayValue(sql, ids)}, ...)`. */
+export function uuidArrayValue(sql: Sql, ids: readonly string[]) {
+  return sql`(SELECT COALESCE(ARRAY(SELECT jsonb_array_elements_text(${sql.json([...ids] as never)}::jsonb)::uuid), '{}'::uuid[]))`;
+}
+
 /** Assert exactly one row came back, with a caller-supplied not-found error. */
 export function exactlyOne<T>(rows: readonly T[], onMissing: () => Error): T {
   const first = rows[0];

@@ -47,6 +47,7 @@ import {
 import { inTransaction, requireLock, type Sql } from '../db/client.js';
 import { writeAuditEvent } from '../db/audit-writer.js';
 import { assertFreshAuthentication, assertWebAuthnSession } from './auth.js';
+import { permissionsOfActor as permissionsOf } from './permissions.js';
 import { verifyAuthorizationPin } from './crypto.js';
 import { loadPolicy } from './policy-store.js';
 import { assessBatch } from './risk-service.js';
@@ -112,7 +113,7 @@ export async function openAuthorizationCeremony(params: {
 
     // ---- State ----------------------------------------------------------
     assertTransition(batch.state, 'BEGIN_AUTHORIZATION', {
-      actor: { level: actor.level, permissions: new Set<Permission>(['payment:authorize']) },
+      actor: { level: actor.level, permissions: permissionsOf(actor) },
     });
 
     // ---- Approval chain --------------------------------------------------
@@ -318,7 +319,7 @@ export async function releaseBatch(input: ReleaseInput): Promise<ReleaseResult> 
     const batch = await loadBatch(tx, actor.organizationId, batchId);
 
     assertTransition(batch.state, 'AUTHORIZE', {
-      actor: { level: actor.level, permissions: new Set<Permission>(['payment:release']) },
+      actor: { level: actor.level, permissions: permissionsOf(actor) },
     });
 
     // ---- SPAC PIN --------------------------------------------------------
@@ -591,7 +592,7 @@ export async function abandonCeremony(params: {
     const batch = await loadBatch(tx, actor.organizationId, batchId);
 
     assertTransition(batch.state, 'ABANDON_AUTHORIZATION', {
-      actor: { level: actor.level, permissions: new Set<Permission>(['payment:authorize']) },
+      actor: { level: actor.level, permissions: permissionsOf(actor) },
     });
 
     await tx`

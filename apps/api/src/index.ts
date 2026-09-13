@@ -31,7 +31,7 @@ import { handlePaymentBatch } from './queues/payment-executor.js';
 import { handleCallbackBatch } from './queues/callback-processor.js';
 import { handleReconciliationBatch } from './queues/reconciliation-worker.js';
 import { handleBackupBatch } from './queues/backup-worker.js';
-import { withConnection } from './db/client.js';
+import { withConnection, uuidSet } from './db/client.js';
 export { OrganizationRateLimiter } from './rate-limiter.js';
 import { correlationId } from '@solvaren/core';
 import type {
@@ -306,7 +306,7 @@ async function runHousekeeping(env: Env, ctx: ExecutionContext, correlation: str
          WHERE state = 'AUTHORIZATION_PENDING'
            AND id IN (
              SELECT batch_id FROM authorization_challenges
-              WHERE id = ANY(${abandoned.map((a) => a.id)}::uuid[])
+              WHERE id = ANY(${uuidSet(sql, abandoned.map((a) => a.id))})
            )
       `;
     }

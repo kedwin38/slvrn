@@ -27,9 +27,9 @@ import {
   stateError,
   MAX_CSV_BYTES,
   type BatchState,
-  type Permission,
 } from '@solvaren/core';
 import { requireAuth, requirePermissions, actorOf } from '../middleware/security.js';
+import { permissionsOfActor } from '../services/permissions.js';
 import { withConnection, inTransaction, requireLock } from '../db/client.js';
 import { writeAuditEvent } from '../db/audit-writer.js';
 import { loadPolicy } from '../services/policy-store.js';
@@ -243,7 +243,7 @@ batchRoutes.post('/:id/validate', requirePermissions('batch:validate'), async (c
       const batch = await loadBatch(tx, actor.organizationId, batchId);
 
       assertTransition(batch.state, 'VALIDATE', {
-        actor: { level: actor.level, permissions: new Set<Permission>(['batch:validate']) },
+        actor: { level: actor.level, permissions: permissionsOfActor(actor) },
       });
 
       if (batch.instruction_count === 0) {
@@ -308,7 +308,7 @@ batchRoutes.post('/:id/submit', requirePermissions('batch:submit_to_l2'), async 
       const batch = await loadBatch(tx, actor.organizationId, batchId);
 
       assertTransition(batch.state, 'SUBMIT_TO_L2', {
-        actor: { level: actor.level, permissions: new Set<Permission>(['batch:submit_to_l2']) },
+        actor: { level: actor.level, permissions: permissionsOfActor(actor) },
       });
 
       // Cooling-off: an edit moments before submission is the "approve the clean version,
@@ -391,11 +391,11 @@ batchRoutes.post('/:id/approve', requirePermissions('batch:approve_to_l3'), asyn
       const from: BatchState = batch.state === 'SUBMITTED_TO_L2' ? 'L2_REVIEW' : batch.state;
       if (batch.state === 'SUBMITTED_TO_L2') {
         assertTransition('SUBMITTED_TO_L2', 'BEGIN_L2_REVIEW', {
-          actor: { level: actor.level, permissions: new Set<Permission>(['batch:review']) },
+          actor: { level: actor.level, permissions: permissionsOfActor(actor) },
         });
       }
       assertTransition(from, 'APPROVE_TO_L3', {
-        actor: { level: actor.level, permissions: new Set<Permission>(['batch:approve_to_l3']) },
+        actor: { level: actor.level, permissions: permissionsOfActor(actor) },
       });
 
       // ---- Separation of duties ------------------------------------------
@@ -502,7 +502,7 @@ batchRoutes.post('/:id/reject', requirePermissions('batch:reject'), async (c) =>
       const batch = await loadBatch(tx, actor.organizationId, batchId);
 
       assertTransition(batch.state, 'REJECT', {
-        actor: { level: actor.level, permissions: new Set<Permission>(['batch:reject']) },
+        actor: { level: actor.level, permissions: permissionsOfActor(actor) },
       });
 
       await tx`
@@ -556,7 +556,7 @@ batchRoutes.post('/:id/hold', requirePermissions('batch:hold'), async (c) => {
       const batch = await loadBatch(tx, actor.organizationId, batchId);
 
       assertTransition(batch.state, 'HOLD', {
-        actor: { level: actor.level, permissions: new Set<Permission>(['batch:hold']) },
+        actor: { level: actor.level, permissions: permissionsOfActor(actor) },
       });
 
       await tx`UPDATE payment_batches SET state = 'HELD' WHERE id = ${batch.id}`;

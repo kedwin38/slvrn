@@ -18,9 +18,12 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "db:migrate": "node scripts/migrate.mjs",
-    "verify": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test",
+    "verify": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm db:test",
     "db:generate-seed": "node --experimental-strip-types scripts/generate-failure-seed.mjs",
-    "db:test": "bash scripts/db-test.sh"
+    "db:test": "bash scripts/db-test.sh",
+    "test:integration": "SOLVAREN_TEST_DATABASE_URL=${SOLVAREN_TEST_DATABASE_URL:-postgres://postgres@localhost:5433/postgres} vitest run apps/api/src/integration.test.ts",
+    "db:up": "bash scripts/dev-postgres.sh start",
+    "db:down": "bash scripts/dev-postgres.sh stop"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

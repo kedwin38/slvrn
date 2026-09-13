@@ -17,7 +17,7 @@ import {
   type InstructionForRisk,
   type OrganizationPolicy,
 } from '@solvaren/core';
-import type { Sql } from '../db/client.js';
+import { uuidSet, uuidArrayValue, type Sql } from '../db/client.js';
 
 export interface RiskBatchRow {
   id: string;
@@ -59,7 +59,7 @@ export async function assessBatch(
              recipient_created_at, payment_details_modified_at
         FROM recipient_payment_history
        WHERE organization_id = ${batch.organization_id}
-         AND recipient_id = ANY(${recipientIds}::uuid[])
+         AND recipient_id = ANY(${uuidSet(tx, recipientIds)})
     `;
     for (const row of rows) {
       history.set(row.recipient_id, {
@@ -166,7 +166,7 @@ export async function persistFindings(
       ) VALUES (
         ${batch.organization_id}, ${batch.id}, ${batch.version}, ${signal.type},
         ${signal.severity}, ${signal.summary}, ${tx.json(signal.evidence as never)},
-        ${signal.instructionIds}::uuid[], 'DETERMINISTIC'
+        ${uuidArrayValue(tx, signal.instructionIds)}, 'DETERMINISTIC'
       )
     `;
   }
