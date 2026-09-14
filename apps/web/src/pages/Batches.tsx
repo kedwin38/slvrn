@@ -20,6 +20,7 @@ import {
   TableSkeleton,
 } from '../components/primitives.js';
 import { AuthorizationCeremony } from './AuthorizationCeremony.js';
+import { BatchDetail } from './BatchDetail.js';
 import { NewBatch } from './NewBatch.js';
 import { Modal } from '../components/primitives.js';
 
@@ -50,6 +51,7 @@ export function BatchesPage({ capabilities, onReleased, onViewTransactions }: Pr
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [ceremonyBatchId, setCeremonyBatchId] = useState<string | null>(null);
+  const [detailBatchId, setDetailBatchId] = useState<string | null>(null);
   const [preparing, setPreparing] = useState(false);
 
   const load = useCallback(async () => {
@@ -207,25 +209,44 @@ export function BatchesPage({ capabilities, onReleased, onViewTransactions }: Pr
                       )}
                     </td>
                     <td className="right">
-                      {/* The release entry point exists only on a batch that is genuinely
-                          ready, and only for an actor with release authority. */}
-                      {canAuthorize && batch.state === 'L3_READY' && (
+                      <div
+                        className="row"
+                        style={{ gap: 'var(--s2)', justifyContent: 'flex-end', flexWrap: 'wrap' }}
+                      >
+                        {/* The release entry point exists only on a batch that is genuinely
+                            ready, and only for an actor with release authority. */}
+                        {canAuthorize && batch.state === 'L3_READY' && (
+                          <button
+                            className="button button-sm"
+                            data-variant="primary"
+                            onClick={() => setCeremonyBatchId(batch.batchId)}
+                          >
+                            Review &amp; authorize
+                          </button>
+                        )}
+                        {batch.state === 'AUTHORIZATION_PENDING' && canAuthorize && (
+                          <button
+                            className="button button-sm"
+                            onClick={() => setCeremonyBatchId(batch.batchId)}
+                          >
+                            Resume authorization
+                          </button>
+                        )}
+                        {/*
+                          Every row opens, at every state. This was the gap: a draft had no
+                          action at all, so an operator who closed the wizard could never
+                          finish their batch, and no reviewer could approve one.
+                        */}
                         <button
                           className="button button-sm"
-                          data-variant="primary"
-                          onClick={() => setCeremonyBatchId(batch.batchId)}
+                          data-variant="ghost"
+                          onClick={() => setDetailBatchId(batch.batchId)}
                         >
-                          Review &amp; authorize
+                          {batch.state === 'DRAFT' || batch.state === 'VALIDATED'
+                            ? 'Continue'
+                            : 'Open'}
                         </button>
-                      )}
-                      {batch.state === 'AUTHORIZATION_PENDING' && canAuthorize && (
-                        <button
-                          className="button button-sm"
-                          onClick={() => setCeremonyBatchId(batch.batchId)}
-                        >
-                          Resume authorization
-                        </button>
-                      )}
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -242,6 +263,18 @@ export function BatchesPage({ capabilities, onReleased, onViewTransactions }: Pr
           </h2>
           <NewBatch onClose={() => setPreparing(false)} onDone={() => void load()} />
         </Modal>
+      )}
+
+      {detailBatchId && (
+        <BatchDetail
+          batchId={detailBatchId}
+          onClose={() => setDetailBatchId(null)}
+          onChanged={() => void load()}
+          onAuthorize={(batchId) => {
+            setDetailBatchId(null);
+            setCeremonyBatchId(batchId);
+          }}
+        />
       )}
 
       {ceremonyBatchId && (

@@ -1640,6 +1640,256 @@ suite('HTTP routes', () => {
     });
   });
 
+  // =========================================================================
+  // The batch lifecycle, end to end through HTTP
+  //
+  // Every one of these steps existed as an endpoint and none of them was reachable from the
+  // console. A draft could not be resumed and no L2 could approve anything, so a batch
+  // submitted to Finance Control could never reach the executive — and no payment could
+  // ever be released on a real deployment.
+  // =========================================================================
+
+  // =========================================================================
+  // Daraja is Level 3 alone (spec §4.4, §9)
+  //
+  // Not "hidden from the menu" — refused at the data API, on every verb and every path, for
+  // both lower levels. The console hiding the screen is a courtesy; this is the control.
+  // =========================================================================
+
+  describe('Daraja administration is L3-only', () => {
+    const surfaces: [string, string][] = [
+      ['GET', '/admin/daraja'],
+      ['POST', '/admin/daraja'],
+      ['POST', '/admin/daraja/00000000-0000-0000-0000-0000000000d1/test'],
+      ['POST', '/admin/daraja/00000000-0000-0000-0000-0000000000d1/enable'],
+      ['POST', '/admin/daraja/00000000-0000-0000-0000-0000000000d1/disable'],
+    ];
+
+    for (const [method, path] of surfaces) {
+      it(`refuses ${method} ${path} to L1 and L2`, async () => {
+        for (const level of ['L1', 'L2'] as AuthorityLevel[]) {
+          const response = await call(path, {
+            level,
+            method,
+            body: method === 'GET' ? undefined : {},
+          });
+          // 403, never 404: the refusal is an authority decision, and it must not depend on
+          // whether the id happens to exist.
+          expect(response.status, `${level} ${method} ${path}`).toBe(403);
+        }
+      });
+    }
+
+    it('refuses an unauthenticated caller outright', async () => {
+      expect((await call('/admin/daraja')).status).toBe(401);
+    });
+
+    it('withholds the capability from the payload the console renders from', async () => {
+      for (const level of ['L1', 'L2'] as AuthorityLevel[]) {
+        const response = await call('/auth/session', { level });
+        const body = (await response.json()) as { capabilities: Record<string, boolean> };
+        expect(body.capabilities['admin:daraja']).toBe(false);
+        expect(body.capabilities['admin:security']).toBe(false);
+        expect(body.capabilities['admin:policies']).toBe(false);
+        expect(body.capabilities['admin:users']).toBe(false);
+      }
+      const l3 = (await (await call('/auth/session', { level: 'L3' })).json()) as {
+        capabilities: Record<string, boolean>;
+      };
+      expect(l3.capabilities['admin:daraja']).toBe(true);
+    });
+  });
+
+  describe('batch lifecycle', () => {
+    async function draft(reference: string) {
+      const response = await call('/batches', {
+        level: 'L1',
+        method: 'POST',
+        body: { purpose: `Lifecycle ${reference}` },
+      });
+      expect(response.status).toBe(201);
+      return ((await response.json()) as { batchId: string }).batchId;
+    }
+
+    /** Fill a draft the way an upload would, without going through multipart. */
+    async function addRows(batchId: string, count = 2) {
+      const recipients = await harness.sql<{ id: string }[]>`
+        INSERT INTO recipients (organization_id, full_name, msisdn)
+        VALUES (${ORG}, 'Lifecycle Payee', '254790000001')
+        ON CONFLICT (organization_id, msisdn) DO UPDATE SET full_name = EXCLUDED.full_name
+        RETURNING id
+      `;
+      for (let i = 0; i < count; i++) {
+        await harness.sql`
+          INSERT INTO payment_instructions (organization_id, batch_id, recipient_id,
+                                            recipient_name_snapshot, msisdn_snapshot, amount_cents)
+          VALUES (${ORG}, ${batchId}, ${recipients[0]!.id}, 'Lifecycle Payee',
+                  '254790000001', 100000)
+        `;
+      }
+    }
+
+    it('keeps a draft open so an operator can come back and finish it', async () => {
+      const batchId = await draft('RESUME');
+
+      // The operator leaves. Later, the batch is still theirs to carry forward, and the
+      // server says so in the commands it offers.
+      const reopened = await call(`/batches/${batchId}`, { level: 'L1' });
+      expect(reopened.status).toBe(200);
+      const body = (await reopened.json()) as {
+        batch: { state: string; editable: boolean; availableCommands: string[] };
+      };
+      expect(body.batch.state).toBe('DRAFT');
+      expect(body.batch.editable).toBe(true);
+      expect(body.batch.availableCommands).toContain('VALIDATE');
+
+      await addRows(batchId);
+      expect(
+        (await call(`/batches/${batchId}/validate`, { level: 'L1', method: 'POST' })).status,
+      ).toBe(200);
+
+      const validated = (await (await call(`/batches/${batchId}`, { level: 'L1' })).json()) as {
+        batch: { state: string; availableCommands: string[] };
+      };
+      expect(validated.batch.state).toBe('VALIDATED');
+      expect(validated.batch.availableCommands).toContain('SUBMIT_TO_L2');
+    });
+
+    it('offers each level only the commands it may actually issue', async () => {
+      const batchId = await draft('COMMANDS');
+      await addRows(batchId);
+
+      const commandsFor = async (level: AuthorityLevel) => {
+        const response = await call(`/batches/${batchId}`, { level });
+        const body = (await response.json()) as { batch: { availableCommands: string[] } };
+        return body.batch.availableCommands;
+      };
+
+      // An L1 is never shown Approve — not shown it and refused, simply not shown it.
+      expect(await commandsFor('L1')).toContain('VALIDATE');
+      expect(await commandsFor('L1')).not.toContain('APPROVE_TO_L3');
+      expect(await commandsFor('L2')).not.toContain('SUBMIT_TO_L2');
+    });
+
+    it('carries a batch L1 -> L2 -> L3_READY, the chain that was unreachable', async () => {
+      const batchId = await draft('CHAIN');
+      await addRows(batchId);
+      await call(`/batches/${batchId}/validate`, { level: 'L1', method: 'POST' });
+      expect(
+        (await call(`/batches/${batchId}/submit`, { level: 'L1', method: 'POST' })).status,
+      ).toBe(200);
+
+      // Finance Control approves straight from SUBMITTED_TO_L2. Before this, the edge table
+      // offered only Reject and Hold from that state and nothing could approve at all.
+      const approved = await call(`/batches/${batchId}/approve`, {
+        level: 'L2',
+        method: 'POST',
+        body: {
+          reason: 'Amounts verified against the payroll register',
+          acknowledgeFindings: true,
+        },
+      });
+      expect(approved.status).toBe(200);
+
+      const ready = (await (await call(`/batches/${batchId}`, { level: 'L3' })).json()) as {
+        batch: { state: string; availableCommands: string[] };
+      };
+      expect(ready.batch.state).toBe('L3_READY');
+      // And only now does the executive see the route to release.
+      expect(ready.batch.availableCommands).toContain('BEGIN_AUTHORIZATION');
+    });
+
+    it('refuses the L2 approval to the preparer, however the request is made', async () => {
+      const batchId = await draft('SOD');
+      await addRows(batchId);
+      await call(`/batches/${batchId}/validate`, { level: 'L1', method: 'POST' });
+      await call(`/batches/${batchId}/submit`, { level: 'L1', method: 'POST' });
+
+      const response = await call(`/batches/${batchId}/approve`, {
+        level: 'L1',
+        method: 'POST',
+        body: { reason: 'Approving my own work' },
+      });
+      expect(response.status).toBe(403);
+    });
+
+    it('lifts a hold, so a held batch is not a dead end', async () => {
+      const batchId = await draft('HOLD');
+      await addRows(batchId);
+      await call(`/batches/${batchId}/validate`, { level: 'L1', method: 'POST' });
+      await call(`/batches/${batchId}/submit`, { level: 'L1', method: 'POST' });
+
+      const held = await call(`/batches/${batchId}/hold`, {
+        level: 'L2',
+        method: 'POST',
+        body: { reason: 'Waiting on confirmation from the department head' },
+      });
+      expect(held.status).toBe(200);
+
+      const lifted = await call(`/batches/${batchId}/release-hold`, {
+        level: 'L2',
+        method: 'POST',
+        body: { reason: 'Department head confirmed' },
+      });
+      expect(lifted.status).toBe(200);
+      expect(((await lifted.json()) as { state: string }).state).toBe('SUBMITTED_TO_L2');
+    });
+
+    it('cancels a batch terminally, and only with a reason', async () => {
+      const batchId = await draft('CANCEL');
+      await addRows(batchId);
+
+      // Cancellation is executive authority alone: the permission matrix grants
+      // `batch:cancel` to L3 only, so an operator abandons a draft by asking, not by acting.
+      expect(
+        (
+          await call(`/batches/${batchId}/cancel`, {
+            level: 'L1',
+            method: 'POST',
+            body: { reason: 'Prepared in error' },
+          })
+        ).status,
+      ).toBe(403);
+
+      const noReason = await call(`/batches/${batchId}/cancel`, { level: 'L3', method: 'POST' });
+      expect(noReason.status).toBe(422);
+
+      const cancelled = await call(`/batches/${batchId}/cancel`, {
+        level: 'L3',
+        method: 'POST',
+        body: { reason: 'Duplicate of the run already submitted this morning' },
+      });
+      expect(cancelled.status).toBe(200);
+
+      const after = (await (await call(`/batches/${batchId}`, { level: 'L3' })).json()) as {
+        batch: { state: string; availableCommands: string[] };
+      };
+      expect(after.batch.state).toBe('CANCELLED');
+      // Terminal means terminal: nothing revives it, at any level.
+      expect(after.batch.availableCommands).toEqual([]);
+
+      const instructions = await harness.sql<{ status: string }[]>`
+        SELECT status FROM payment_instructions WHERE batch_id = ${batchId}
+      `;
+      expect(instructions.every((i) => i.status === 'CANCELLED')).toBe(true);
+    });
+
+    it('refuses a cancellation from a level the state machine does not allow it from', async () => {
+      const batchId = await draft('CANCELSOD');
+      await addRows(batchId);
+      await call(`/batches/${batchId}/validate`, { level: 'L1', method: 'POST' });
+      await call(`/batches/${batchId}/submit`, { level: 'L1', method: 'POST' });
+
+      // SUBMITTED_TO_L2 has no CANCEL edge for anybody; it must be rejected or held first.
+      const response = await call(`/batches/${batchId}/cancel`, {
+        level: 'L3',
+        method: 'POST',
+        body: { reason: 'Changed my mind' },
+      });
+      expect([403, 409, 422]).toContain(response.status);
+    });
+  });
+
   describe('health', () => {
     it('liveness reveals nothing about the deployment', async () => {
       const response = await call('/health');

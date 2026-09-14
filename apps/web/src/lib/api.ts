@@ -389,6 +389,49 @@ export interface ExplorerResponse {
   filter: { text: string; parts: string[] };
 }
 
+export interface BatchDetailView {
+  batch: {
+    batchId: string;
+    batchReference: string;
+    purpose: string;
+    state: string;
+    version: number;
+    instructionCount: number;
+    totalAmountCents: number;
+    createdAt: string;
+    submittedAt: string | null;
+    approvedAt: string | null;
+    authorizedAt: string | null;
+    riskScore: number | null;
+    riskBand: string | null;
+    editable: boolean;
+    /**
+     * The commands THIS caller may issue from the batch's current state, decided by the
+     * server. The console renders actions from this list rather than working them out from
+     * the state and the capability payload, so the screen cannot offer a button the API
+     * would refuse.
+     */
+    availableCommands: string[];
+  };
+  instructions: {
+    instructionId: string;
+    recipientName: string;
+    msisdn: string;
+    amountCents: number;
+    status: string;
+    sourceLineNumber: number | null;
+  }[];
+  approvals: {
+    approval_reference: string;
+    action: string;
+    actor_level: string;
+    reason: string | null;
+    batch_version: number;
+    created_at: string;
+  }[];
+  riskFindings: (RiskSignalView & { disposition: string; currentVersion: boolean })[];
+}
+
 export interface PageInfo {
   page: number;
   pageSize: number;
@@ -786,43 +829,7 @@ export const api = {
   batches: {
     list: (state?: string) =>
       request<{ batches: BatchSummary[] }>(`/batches${state ? `?state=${state}` : ''}`),
-    detail: (id: string) =>
-      request<{
-        batch: {
-          batchId: string;
-          batchReference: string;
-          purpose: string;
-          state: string;
-          version: number;
-          instructionCount: number;
-          totalAmountCents: number;
-          createdAt: string;
-          submittedAt: string | null;
-          approvedAt: string | null;
-          authorizedAt: string | null;
-          riskScore: number | null;
-          riskBand: string | null;
-          editable: boolean;
-          availableCommands: string[];
-        };
-        instructions: {
-          instructionId: string;
-          recipientName: string;
-          msisdn: string;
-          amountCents: number;
-          status: string;
-          sourceLineNumber: number | null;
-        }[];
-        approvals: {
-          approval_reference: string;
-          action: string;
-          actor_level: string;
-          reason: string | null;
-          batch_version: number;
-          created_at: string;
-        }[];
-        riskFindings: (RiskSignalView & { disposition: string; currentVersion: boolean })[];
-      }>(`/batches/${id}`),
+    detail: (id: string) => request<BatchDetailView>(`/batches/${id}`),
     rollup: (id: string) =>
       request<{
         batchReference: string;
@@ -842,6 +849,13 @@ export const api = {
       request(`/batches/${id}/reject`, { method: 'POST', body: { reason } }),
     hold: (id: string, reason: string) =>
       request(`/batches/${id}/hold`, { method: 'POST', body: { reason } }),
+    releaseHold: (id: string, reason?: string) =>
+      request<{ state: string }>(`/batches/${id}/release-hold`, {
+        method: 'POST',
+        body: { reason },
+      }),
+    cancel: (id: string, reason: string) =>
+      request<{ state: string }>(`/batches/${id}/cancel`, { method: 'POST', body: { reason } }),
 
     /*
      * Batch preparation, the front half of the payment path.

@@ -22,6 +22,7 @@ import {
   reference,
   isEditable,
   allowedCommands,
+  allowedCommandsForActor,
   notFoundError,
   validationError,
   stateError,
@@ -598,6 +599,135 @@ batchRoutes.post('/:id/hold', requirePermissions('batch:hold'), async (c) => {
 });
 
 /** GET /batches — list batches with their outcome roll-ups. */
+/**
+ * POST /batches/:id/release-hold — lift a hold and return the batch to the review queue.
+ *
+ * `HELD → RELEASE_HOLD → SUBMITTED_TO_L2` has been in the state machine from the start with
+ * nothing able to invoke it, so placing a batch on hold was a one-way door: the money could
+ * not move and nobody could un-hold it. A control that cannot be lifted is not a control,
+ * it is a way to lose a payroll run.
+ */
+batchRoutes.post('/:id/release-hold', requirePermissions('batch:hold'), async (c) => {
+  const actor = actorOf(c);
+  const batchId = c.req.param('id');
+  const body = decisionSchema.parse(await c.req.json().catch(() => ({})));
+  const correlationId = c.get('correlationId');
+
+  const result = await withConnection(c.env, (sql) =>
+    inTransaction(sql, async (tx) => {
+      await requireLock(tx, 'batch', batchId);
+      const batch = await loadBatch(tx, actor.organizationId, batchId);
+
+      assertTransition(batch.state, 'RELEASE_HOLD', {
+        actor: { level: actor.level, permissions: permissionsOfActor(actor) },
+      });
+
+      await tx`UPDATE payment_batches SET state = 'SUBMITTED_TO_L2' WHERE id = ${batch.id}`;
+      await tx`
+        INSERT INTO approvals (
+          organization_id, approval_reference, batch_id, batch_version, actor_user_id,
+          actor_level, action, reason
+        ) VALUES (
+          ${actor.organizationId}, ${reference('RLS')}, ${batch.id}, ${batch.version},
+          ${actor.userId}, ${actor.level}, 'RELEASE_HOLD', ${body.reason ?? null}
+        )
+      `;
+
+      await writeAuditEvent(tx, {
+        organizationId: actor.organizationId,
+        actorId: actor.userId,
+        actorLevel: actor.level,
+        eventClass: 'PAYMENT',
+        action: 'batch.hold_released',
+        objectType: 'PaymentBatch',
+        objectId: batch.id,
+        outcome: 'SUCCESS',
+        previousState: { state: batch.state },
+        newState: { state: 'SUBMITTED_TO_L2' },
+        correlationId,
+        securityContext: c.get('securityContext'),
+        detail: { reason: body.reason ?? null },
+      });
+
+      return { state: 'SUBMITTED_TO_L2' as BatchState };
+    }),
+  );
+
+  return c.json(result);
+});
+
+/**
+ * POST /batches/:id/cancel — abandon a batch that will never be paid.
+ *
+ * `batch:cancel` is in the permission matrix and the state machine and had no route, so the
+ * specification's "cancel eligible unreleased batches" was unimplementable. Cancellation is
+ * terminal by design: `CANCELLED` has no outgoing edge, and the payment executor refuses any
+ * queued instruction whose batch is cancelled. That is the point — it is the brake.
+ *
+ * Who may cancel what is decided by the edge table, not here: an L1 may abandon their own
+ * draft, while cancelling a batch that has already reached executive review is L3's alone.
+ */
+batchRoutes.post('/:id/cancel', requirePermissions('batch:cancel'), async (c) => {
+  const actor = actorOf(c);
+  const batchId = c.req.param('id');
+  const body = decisionSchema.parse(await c.req.json().catch(() => ({})));
+  const correlationId = c.get('correlationId');
+
+  const reasonGiven = body.reason;
+  if (!reasonGiven) {
+    throw validationError(
+      'CANCELLATION_REASON_REQUIRED',
+      'Give a reason. A cancelled batch cannot be revived, and the trail must say why it ended.',
+    );
+  }
+
+  const result = await withConnection(c.env, (sql) =>
+    inTransaction(sql, async (tx) => {
+      await requireLock(tx, 'batch', batchId);
+      const batch = await loadBatch(tx, actor.organizationId, batchId);
+
+      assertTransition(batch.state, 'CANCEL', {
+        actor: { level: actor.level, permissions: permissionsOfActor(actor) },
+      });
+
+      await tx`UPDATE payment_batches SET state = 'CANCELLED' WHERE id = ${batch.id}`;
+      await tx`
+        UPDATE payment_instructions SET status = 'CANCELLED'
+         WHERE batch_id = ${batch.id} AND status = 'PENDING'
+      `;
+      await tx`
+        INSERT INTO approvals (
+          organization_id, approval_reference, batch_id, batch_version, actor_user_id,
+          actor_level, action, reason
+        ) VALUES (
+          ${actor.organizationId}, ${reference('CAN')}, ${batch.id}, ${batch.version},
+          ${actor.userId}, ${actor.level}, 'CANCEL', ${reasonGiven}
+        )
+      `;
+
+      await writeAuditEvent(tx, {
+        organizationId: actor.organizationId,
+        actorId: actor.userId,
+        actorLevel: actor.level,
+        eventClass: 'PAYMENT',
+        action: 'batch.cancelled',
+        objectType: 'PaymentBatch',
+        objectId: batch.id,
+        outcome: 'SUCCESS',
+        previousState: { state: batch.state },
+        newState: { state: 'CANCELLED' },
+        correlationId,
+        securityContext: c.get('securityContext'),
+        detail: { reason: reasonGiven },
+      });
+
+      return { state: 'CANCELLED' as BatchState };
+    }),
+  );
+
+  return c.json(result);
+});
+
 batchRoutes.get('/', requirePermissions('batch:read'), async (c) => {
   const actor = actorOf(c);
   const url = new URL(c.req.url);
@@ -742,7 +872,12 @@ batchRoutes.get('/:id', requirePermissions('batch:read'), async (c) => {
         riskScore: batch.risk_score,
         riskBand: batch.risk_band,
         editable: isEditable(batch.state),
-        availableCommands: allowedCommands(batch.state),
+        // Scoped to this caller, not to the state alone: a screen that offers an L1 the
+        // Approve button and lets them discover the refusal by pressing it is worse than
+        // one that never offers it.
+        availableCommands: allowedCommandsForActor(batch.state, {
+          permissions: permissionsOfActor(actor),
+        }),
       },
       instructions: instructions.map((i) => ({
         instructionId: i.id,

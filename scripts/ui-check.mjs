@@ -291,7 +291,40 @@ const server = createServer((req, res) => {
               totalAmountCents: 186400000,
               outcomes: { success: 0, failed: 0, timeout: 0, inFlight: 0 },
             },
+            {
+              batchId: 'b-draft',
+              batchReference: 'SLV-2026-00999',
+              state: 'DRAFT',
+              instructionCount: 0,
+              totalAmountCents: 0,
+              outcomes: { success: 0, failed: 0, timeout: 0, inFlight: 0 },
+            },
           ],
+        }),
+      );
+    if (/^\/api\/batches\/[^/]+$/.test(url.pathname))
+      return res.end(
+        JSON.stringify({
+          batch: {
+            batchId: 'b-draft',
+            batchReference: 'SLV-2026-00999',
+            purpose: 'September payroll',
+            state: 'DRAFT',
+            version: 1,
+            instructionCount: 0,
+            totalAmountCents: 0,
+            createdAt: new Date().toISOString(),
+            submittedAt: null,
+            approvedAt: null,
+            authorizedAt: null,
+            riskScore: null,
+            riskBand: null,
+            editable: true,
+            availableCommands: ['VALIDATE', 'CANCEL'],
+          },
+          instructions: [],
+          approvals: [],
+          riskFindings: [],
         }),
       );
     if (url.pathname === '/api/authorization/batches/b2/begin')
@@ -455,6 +488,26 @@ for (const theme of ['light', 'dark']) {
   await page.click('text=Payment batches');
   await page.waitForSelector('table.table', { timeout: 5000 });
   await shot(page, `04-batches-${theme}`);
+
+  /*
+   * A saved draft must be resumable. This is the operator-reported gap: the wizard closed
+   * and the draft became unreachable, because a DRAFT row carried no action at all. The
+   * assertion is that Continue opens the batch and offers the upload it needs to go on.
+   */
+  await page.click('text=Continue');
+  await page.waitForSelector('#batch-detail-title', { timeout: 5000 });
+  const resumable = await page.locator('input[type=file]').count();
+  const canValidate = await page.locator('button:has-text("Validate")').count();
+  if (resumable === 0 || canValidate === 0) {
+    errors.push(
+      `[${theme}] a saved draft cannot be resumed: ${resumable} upload control, ${canValidate} validate action`,
+    );
+  }
+  console.log(
+    `  draft resumable: upload ${resumable > 0 ? 'yes' : 'NO (BUG)'}, validate ${canValidate > 0 ? 'yes' : 'NO (BUG)'}`,
+  );
+  await shot(page, `09-batch-detail-${theme}`);
+  await page.keyboard.press('Escape');
 
   await page.click('text=Review & authorize');
   await page.waitForSelector('.ceremony-amount-value', { timeout: 5000 });

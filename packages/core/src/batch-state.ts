@@ -154,6 +154,27 @@ export const BATCH_EDGES: readonly BatchEdge[] = [
     'Rejected and returned to Payment Operations',
   ),
   E('L2_REVIEW', 'RETURN_TO_L1', 'DRAFT', 'batch:reject', 'L2', 'Returned for correction'),
+  /*
+   * Approving straight from SUBMITTED_TO_L2, without a separate "open review" step.
+   *
+   * The approve route has always accepted this — it asserts BEGIN_L2_REVIEW and then
+   * approves — but the edge table did not say so, so anything reading the table to decide
+   * what a reviewer may do concluded that a freshly submitted batch could only be rejected
+   * or held. That is the state every batch actually sits in when it reaches Finance
+   * Control, and BEGIN_L2_REVIEW has no endpoint of its own to get out of it, so the
+   * console offered no way to approve anything at all.
+   *
+   * Nothing is loosened by naming the edge: separation of duties, the risk acknowledgement
+   * and the approval record are enforced in the route, not here.
+   */
+  E(
+    'SUBMITTED_TO_L2',
+    'APPROVE_TO_L3',
+    'L3_READY',
+    'batch:approve_to_l3',
+    'L2',
+    'Approved and forwarded for executive authorization',
+  ),
   E('SUBMITTED_TO_L2', 'REJECT', 'DRAFT', 'batch:reject', 'L2', 'Rejected before review'),
   E('L2_REVIEW', 'HOLD', 'HELD', 'batch:hold', 'L2', 'Placed on hold pending clarification'),
   E('SUBMITTED_TO_L2', 'HOLD', 'HELD', 'batch:hold', 'L2', 'Placed on hold pending clarification'),
@@ -361,6 +382,27 @@ export function canTransition(from: BatchState, command: BatchCommand): boolean 
 
 export function allowedCommands(from: BatchState): BatchCommand[] {
   return BATCH_EDGES.filter((e) => e.from === from).map((e) => e.command);
+}
+
+/**
+ * The commands this particular actor may issue against a batch in this state.
+ *
+ * `allowedCommands` answers a question about the state machine alone, which is the wrong
+ * question for a console: it would offer an L1 the Approve button and let them discover the
+ * refusal by pressing it. This intersects the state's edges with the actor's own
+ * permissions, using exactly the rule `assertTransition` enforces, so the screen and the
+ * server cannot disagree.
+ *
+ * System-only edges are never included: no human issues those, at any level.
+ */
+export function allowedCommandsForActor(
+  from: BatchState,
+  actor: { permissions: ReadonlySet<Permission> },
+): BatchCommand[] {
+  return BATCH_EDGES.filter(
+    (e) =>
+      e.from === from && !e.systemOnly && (!e.permission || actor.permissions.has(e.permission)),
+  ).map((e) => e.command);
 }
 
 export function isEditable(state: BatchState): boolean {

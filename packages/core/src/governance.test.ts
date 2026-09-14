@@ -27,6 +27,8 @@ import {
 import { evaluateReleasePolicy, DEFAULT_POLICY } from './policy.js';
 import type { RiskAssessment } from './risk.js';
 import { SolvarenError } from './errors.js';
+import { allowedCommandsForActor } from './batch-state.js';
+import { capabilitiesFor, type Permission } from './rbac.js';
 
 const participants = (o: Partial<BatchParticipants> = {}): BatchParticipants => ({
   createdByUserId: 'user-l1',
@@ -523,5 +525,64 @@ describe('release policy engine', () => {
     expect(result.acknowledgementsRequired.join(' ')).toMatch(
       /high-value release of KES 8,420,500.00/,
     );
+  });
+});
+
+describe('the commands a console may offer (§7.3)', () => {
+  /** Exactly the permission set the server would grant this level, not a hand-written one. */
+  const held = (level: 'L1' | 'L2' | 'L3'): ReadonlySet<Permission> => {
+    const capabilities = capabilitiesFor({ level, status: 'ACTIVE' });
+    return new Set((Object.keys(capabilities) as Permission[]).filter((p) => capabilities[p]));
+  };
+
+  it('never offers an L1 the approval that would collapse the two-person rule', () => {
+    const commands = allowedCommandsForActor('SUBMITTED_TO_L2', { permissions: held('L1') });
+    expect(commands).not.toContain('APPROVE_TO_L3');
+    expect(commands).not.toContain('REJECT');
+  });
+
+  it('offers finance control exactly the decisions it is meant to take', () => {
+    const commands = allowedCommandsForActor('SUBMITTED_TO_L2', { permissions: held('L2') });
+    expect(commands).toContain('APPROVE_TO_L3');
+    expect(commands).toContain('REJECT');
+    expect(commands).toContain('HOLD');
+  });
+
+  it('does not offer the executive the L2 approval step', () => {
+    // L3 approving on L2's behalf would make one person the whole chain.
+    expect(allowedCommandsForActor('SUBMITTED_TO_L2', { permissions: held('L3') })).not.toContain(
+      'APPROVE_TO_L3',
+    );
+  });
+
+  it('offers release only to the executive, and only from L3_READY', () => {
+    expect(allowedCommandsForActor('L3_READY', { permissions: held('L3') })).toContain(
+      'BEGIN_AUTHORIZATION',
+    );
+    expect(allowedCommandsForActor('L3_READY', { permissions: held('L2') })).not.toContain(
+      'BEGIN_AUTHORIZATION',
+    );
+    expect(allowedCommandsForActor('DRAFT', { permissions: held('L3') })).not.toContain(
+      'BEGIN_AUTHORIZATION',
+    );
+  });
+
+  it('lets an operator carry their own draft forward', () => {
+    expect(allowedCommandsForActor('DRAFT', { permissions: held('L1') })).toContain('VALIDATE');
+    expect(allowedCommandsForActor('VALIDATED', { permissions: held('L1') })).toContain(
+      'SUBMIT_TO_L2',
+    );
+  });
+
+  it('offers a way out of a hold, so a held batch is never a dead end', () => {
+    expect(allowedCommandsForActor('HELD', { permissions: held('L2') })).toContain('RELEASE_HOLD');
+    expect(allowedCommandsForActor('HELD', { permissions: held('L3') })).toContain('CANCEL');
+  });
+
+  it('never offers a system-only edge to any human', () => {
+    for (const level of ['L1', 'L2', 'L3'] as const) {
+      const commands = allowedCommandsForActor('AUTHORIZED', { permissions: held(level) });
+      expect(commands).not.toContain('ENQUEUE');
+    }
   });
 });
