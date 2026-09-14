@@ -196,12 +196,30 @@ async function main() {
    */
   if (appOrigin) {
     try {
-      const html = await (await fetchWithTimeout(appOrigin)).text();
-      const scripts = [...html.matchAll(/src="([^"]+\.js)"/g)].map((m) => m[1]);
-      const bundles = await Promise.all(
-        scripts.map(async (src) => (await fetchWithTimeout(new URL(src, appOrigin))).text()),
-      );
-      const all = bundles.join('');
+      /*
+       * The API and the console deploy concurrently, so this can reach the console origin
+       * while its nginx is still coming up and the old bundle is still being served. That
+       * produced a FAILED line for a screen that was in fact deployed — and a deploy gate
+       * that cries wolf is one people learn to ignore, which is worse than not having it.
+       *
+       * So the newest assertion is retried briefly. This waits for the console to settle;
+       * it does not paper over a genuinely missing screen, because the loop still ends in
+       * the same assertions against whatever is actually being served.
+       */
+      const settleFor = Number(process.env.CONSOLE_SETTLE_ATTEMPTS ?? '10');
+      let all = '';
+      for (let attempt = 1; attempt <= settleFor; attempt++) {
+        const html = await (await fetchWithTimeout(appOrigin)).text();
+        const scripts = [...html.matchAll(/src="([^"]+\.js)"/g)].map((m) => m[1]);
+        const bundles = await Promise.all(
+          scripts.map(async (src) => (await fetchWithTimeout(new URL(src, appOrigin))).text()),
+        );
+        all = bundles.join('');
+        // `Confirm it is you` is the most recently added screen; when it is present the
+        // console has finished swapping and every older assertion is settled too.
+        if (all.includes('Confirm it is you') || attempt === settleFor) break;
+        await new Promise((resolve) => setTimeout(resolve, 3000));
+      }
 
       for (const [needle, label] of [
         ['New payment batch', 'batch creation'],
