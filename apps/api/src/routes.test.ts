@@ -2334,7 +2334,14 @@ suite('HTTP routes', () => {
       }
     });
 
-    it('refuses symbols M-PESA does not accept in an initiator password', async () => {
+    /*
+     * Deliberately NOT refused. Safaricom's guidance about restricting symbols describes
+     * what the portal accepts when a password is set; by the time it reaches this form it
+     * already exists and already satisfies that. Re-deriving the rule here would stop an
+     * operator configuring payments at all over a password the portal was happy with —
+     * a far worse failure than a later 2001, which the failure dictionary explains.
+     */
+    it('accepts an existing portal password containing other symbols', async () => {
       const response = await call('/admin/daraja', {
         level: 'L3',
         method: 'POST',
@@ -2344,13 +2351,63 @@ suite('HTTP routes', () => {
           initiatorName: 'testapi',
           consumerKey: 'consumer-key-value',
           consumerSecret: 'consumer-secret-value',
-          initiatorPasswordOrCredential: 'pass(word)1',
+          initiatorPasswordOrCredential: 'Pass-word123!',
+        },
+      });
+      const body = (await response.json()) as { error: { code: string } };
+      expect(body.error.code).toBe('DARAJA_CERTIFICATE_REQUIRED');
+    });
+
+    /*
+     * The documentation's sample credential, `RC6E9WDxXR4b9X2c6z3gp0oC5Th==`, is a 29-char
+     * placeholder. A genuine one is base64 of a 1024- or 2048-bit ciphertext — 172 or 344
+     * characters — so the length heuristic that distinguishes a credential from a password
+     * is sound, and the sample is correctly treated as a password needing a certificate.
+     *
+     * What must not happen is the base64 itself being rejected as an illegal password
+     * character, which is what an earlier charset rule did: the operator was told the
+     * request was invalid, with no field named and no reason given.
+     */
+    it('does not reject base64 as though it were an illegal password', async () => {
+      const response = await call('/admin/daraja', {
+        level: 'L3',
+        method: 'POST',
+        body: {
+          environment: 'sandbox',
+          shortCode: '600992',
+          initiatorName: 'testapi',
+          consumerKey: 'consumer-key-value',
+          consumerSecret: 'consumer-secret-value',
+          initiatorPasswordOrCredential: 'RC6E9WDxXR4b9X2c6z3gp0oC5Th==',
+        },
+      });
+      const body = (await response.json()) as { error: { code: string } };
+      // Refused for want of a certificate — an actionable answer — not as a bad password.
+      expect(body.error.code).toBe('DARAJA_CERTIFICATE_REQUIRED');
+    });
+
+    it('names the offending field so the operator knows what to change', async () => {
+      const response = await call('/admin/daraja', {
+        level: 'L3',
+        method: 'POST',
+        body: {
+          environment: 'sandbox',
+          shortCode: '600992',
+          initiatorName: 'testapi',
+          consumerKey: 'short',
+          consumerSecret: 'consumer-secret-value',
+          initiatorPasswordOrCredential: 'Safaricom2026pay',
         },
       });
       expect(response.status).toBe(422);
+      const body = (await response.json()) as {
+        error: { details: { fields: { path: string; message: string }[] } };
+      };
+      // "The request was not valid" alone leaves somebody staring at a seven-field form.
+      expect(body.error.details.fields.some((f) => f.path === 'consumerKey')).toBe(true);
     });
 
-    it('accepts the symbols M-PESA does allow', async () => {
+    it('accepts a password of letters, digits and the documented symbols', async () => {
       const response = await call('/admin/daraja', {
         level: 'L3',
         method: 'POST',

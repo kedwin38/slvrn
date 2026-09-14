@@ -35,7 +35,18 @@ export class ApiError extends Error {
   readonly correlationId: string | null;
 
   constructor(status: number, shape: ApiErrorShape) {
-    super(shape.message);
+    /*
+     * A validation failure arrives with per-field reasons in `details.fields`, and the
+     * top-level message is only ever the generic "The request was not valid". Rendering
+     * that alone — which every screen did, because `message` is what they show — left an
+     * operator staring at a seven-field credential form with no idea which field was wrong
+     * or why. The reason for each one is already on the wire; it was simply thrown away.
+     *
+     * Composed here rather than in each screen so every form gets it, and so a message is
+     * never assembled from values: the server deliberately sends field paths and reasons
+     * only, never the rejected input, which may be a password or a PIN.
+     */
+    super(ApiError.describe(shape));
     this.name = 'ApiError';
     this.status = status;
     this.code = shape.code;
@@ -48,6 +59,40 @@ export class ApiError extends Error {
   get requiresReauthentication(): boolean {
     return this.status === 401 || this.code === 'STEP_UP_REQUIRED';
   }
+
+  /** Field-level reasons, when the server sent any. */
+  get fieldErrors(): { path: string; message: string }[] {
+    const fields = (this.details as { fields?: unknown }).fields;
+    return Array.isArray(fields)
+      ? (fields as { path?: unknown; message?: unknown }[])
+          .filter((f) => typeof f?.message === 'string')
+          .map((f) => ({
+            path: typeof f.path === 'string' ? f.path : '',
+            message: String(f.message),
+          }))
+      : [];
+  }
+
+  private static describe(shape: ApiErrorShape): string {
+    const fields = (shape.details as { fields?: unknown } | undefined)?.fields;
+    if (!Array.isArray(fields) || fields.length === 0) return shape.message;
+
+    const reasons = (fields as { path?: unknown; message?: unknown }[])
+      .filter((field) => typeof field?.message === 'string')
+      .map((field) => {
+        const path = typeof field.path === 'string' && field.path ? `${label(field.path)}: ` : '';
+        return `${path}${String(field.message)}`;
+      });
+
+    return reasons.length > 0 ? reasons.join(' ') : shape.message;
+  }
+}
+
+/** `initiatorPasswordOrCredential` reads badly in a sentence; "Initiator password" does not. */
+function label(path: string): string {
+  const leaf = path.split('.').pop() ?? path;
+  const spaced = leaf.replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/[_-]+/g, ' ');
+  return spaced.charAt(0).toUpperCase() + spaced.slice(1);
 }
 
 /*

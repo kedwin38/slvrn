@@ -73,19 +73,28 @@ const darajaConfigSchema = z.object({
     .min(8)
     .max(2000)
     .superRefine((value, ctx) => {
-      if (isPrecomputedCredential(value)) return;
+      // Anything base64-shaped is a SecurityCredential generated on the portal, not a
+      // password. Those legitimately contain + / = and none of the rules below apply.
+      if (isPrecomputedCredential(value) || /^[A-Za-z0-9+/]+={0,2}$/.test(value)) return;
+
+      /*
+       * `@` and `.` only. Safaricom's guidance also suggests restricting other symbols, but
+       * that describes what the portal accepts when the password is SET — by the time it is
+       * typed here it already exists and already satisfies whatever the portal enforced, so
+       * re-deriving that rule second-guesses it.
+       *
+       * The asymmetry decides it. Over-blocking means the operator cannot configure
+       * payments at all, which is where they are stopped dead on day one; under-blocking
+       * means a payment fails later with 2001, which the failure dictionary already
+       * explains and tells them how to fix. These two characters are worth refusing because
+       * the documentation names them specifically, and because neither can appear in a
+       * legitimate base64 credential — so this cannot misfire on one.
+       */
       if (/[@.]/.test(value)) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           message:
-            'The M-PESA portal does not accept "@" or "." in an initiator password. Every payment would fail with ResultCode 2001. Change it on the org portal and enter the new one.',
-        });
-      }
-      if (/[^A-Za-z0-9#&%$]/.test(value)) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message:
-            'M-PESA restricts initiator passwords to letters, digits and the symbols # & % $.',
+            'M-PESA does not round-trip "@" or "." in an initiator password — every payment would fail with ResultCode 2001. Set a password without them on the M-PESA org portal, or paste the SecurityCredential the portal generates instead.',
         });
       }
     }),
