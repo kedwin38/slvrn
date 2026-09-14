@@ -558,6 +558,51 @@ BEGIN
     RAISE NOTICE 'PASS  every tenant-owned table is scoped by a NOT NULL organization_id';
 END $$;
 
+-- ---------------------------------------------------------------------------
+-- §9.3 — one OUTSTANDING attempt per instruction, not one attempt ever
+--
+-- The constraint here used to be UNIQUE (instruction_id), which forbade a second claim for
+-- all time. That is stricter than the property it was defending, and strictly wrong: an
+-- operator retrying a payment that has definitively FAILED is not racing anybody, and the
+-- retry endpoint hit a constraint violation after having already told them the payment was
+-- being re-sent.
+--
+-- What must hold is that two attempts are never live at once. These assertions pin both
+-- halves: a live claim blocks another, and a settled one does not.
+-- ---------------------------------------------------------------------------
+DO $$
+BEGIN
+    INSERT INTO idempotency_claims (fingerprint, organization_id, instruction_id, state)
+    VALUES ('fp-live-1', '00000000-0000-0000-0000-0000000000a1',
+            '00000000-0000-0000-0000-0000000000f1', 'CLAIMED');
+    RAISE NOTICE 'PASS  an instruction can take its first idempotency claim';
+END $$;
+
+SELECT assert_refused($$
+    INSERT INTO idempotency_claims (fingerprint, organization_id, instruction_id, state)
+    VALUES ('fp-live-2', '00000000-0000-0000-0000-0000000000a1',
+            '00000000-0000-0000-0000-0000000000f1', 'CLAIMED')
+$$, 'a second claim is refused while the first is still outstanding');
+
+DO $$
+BEGIN
+    -- The first attempt reaches a terminal outcome, as a FAILED disbursement does.
+    UPDATE idempotency_claims SET state = 'SETTLED' WHERE fingerprint = 'fp-live-1';
+
+    -- Now a deliberate retry may claim its own fingerprint. This is what the operator's
+    -- Retry button depends on; before 0010 it raised a constraint violation.
+    INSERT INTO idempotency_claims (fingerprint, organization_id, instruction_id, state)
+    VALUES ('fp-retry-1', '00000000-0000-0000-0000-0000000000a1',
+            '00000000-0000-0000-0000-0000000000f1', 'CLAIMED');
+    RAISE NOTICE 'PASS  a retry may claim once the previous attempt has settled';
+END $$;
+
+SELECT assert_refused($$
+    INSERT INTO idempotency_claims (fingerprint, organization_id, instruction_id, state)
+    VALUES ('fp-retry-2', '00000000-0000-0000-0000-0000000000a1',
+            '00000000-0000-0000-0000-0000000000f1', 'SUBMITTED')
+$$, 'a third claim is refused while the retry itself is outstanding');
+
 \echo ''
 \echo '================================================================'
 \echo ' All SOLVAREN database security assertions passed.'

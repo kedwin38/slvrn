@@ -216,7 +216,7 @@ export async function executeInstruction(
     await tx`UPDATE payment_instructions SET status = 'FAILED' WHERE id = ${instruction.id}`;
     await tx`
       UPDATE idempotency_claims SET state = 'SETTLED', updated_at = now()
-       WHERE instruction_id = ${instruction.id}
+       WHERE fingerprint = ${message.fingerprint}
     `;
     await writeAuditEvent(tx, {
       organizationId: message.organizationId,
@@ -295,9 +295,21 @@ async function prepareSubmission(
     const instruction = rows[0];
     if (!instruction) return { skip: true as const };
 
-    // The batch must still be in an execution state. A cancelled or held batch whose
-    // message is still on the queue must not pay.
-    if (!['AUTHORIZED', 'QUEUED', 'SUBMITTED', 'PROCESSING'].includes(instruction.batch_state)) {
+    /*
+     * The batch must still be in an execution state. A cancelled or held batch whose
+     * message is still on the queue must not pay.
+     *
+     * A deliberate retry is the exception, and the common case for one is a batch that has
+     * already finished: it settles as PARTIAL_SUCCESS with two failures and the operator
+     * retries those two. Refusing on batch state there would drop every retry that matters.
+     * The authority is unchanged — same manifest hash, same ceremony — and the transaction
+     * itself must be FAILED for the endpoint to have enqueued this at all. CANCELLED stays
+     * refused in both directions: a cancelled batch pays nobody, ever.
+     */
+    const executable = ['AUTHORIZED', 'QUEUED', 'SUBMITTED', 'PROCESSING'];
+    const settled = ['SUCCESS', 'PARTIAL_SUCCESS', 'FAILED', 'TIMEOUT'];
+    const allowedStates = message.retrySequence ? [...executable, ...settled] : executable;
+    if (!allowedStates.includes(instruction.batch_state)) {
       return { skip: true as const };
     }
 
@@ -317,6 +329,7 @@ async function prepareSubmission(
       msisdn: instruction.msisdn_snapshot,
       amountCents: Number(instruction.amount_cents),
       manifestHash: message.manifestHash,
+      retrySequence: message.retrySequence,
     });
     if (fingerprint !== message.fingerprint) {
       await writeAuditEvent(tx, {
@@ -346,7 +359,7 @@ async function prepareSubmission(
     >`
       SELECT fingerprint, state, originator_conversation_id, claimed_at, updated_at
         FROM idempotency_claims
-       WHERE instruction_id = ${instruction.id}
+       WHERE fingerprint = ${message.fingerprint}
        FOR UPDATE
     `;
     const claim = claims[0];
@@ -406,7 +419,7 @@ async function prepareSubmission(
     await tx`
       UPDATE idempotency_claims
          SET state = 'SUBMITTED', originator_conversation_id = ${originatorId}, updated_at = now()
-       WHERE instruction_id = ${instruction.id}
+       WHERE fingerprint = ${message.fingerprint}
     `;
     await tx`UPDATE payment_instructions SET status = 'SUBMITTED' WHERE id = ${instruction.id}`;
     await tx`

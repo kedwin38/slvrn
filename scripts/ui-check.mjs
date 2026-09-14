@@ -67,12 +67,17 @@ const server = createServer((req, res) => {
             'batch:read': true,
             'payment:release': true,
             'admin:backups': true,
+            'admin:daraja': true,
             'dashboard:balance_panel': true,
             'dashboard:recent_transactions_panel': true,
             'analytics:basic': true,
           },
         }),
       );
+    if (url.pathname === '/api/admin/daraja')
+      return res.end(JSON.stringify({ configurations: [] }));
+    if (url.pathname === '/api/analytics/action-queue')
+      return res.end(JSON.stringify({ items: [], counts: { total: 0, critical: 0, warning: 0 } }));
     if (url.pathname === '/api/analytics/operational')
       return res.end(
         JSON.stringify({
@@ -454,6 +459,35 @@ for (const theme of ['light', 'dark']) {
   await page.click('text=Review & authorize');
   await page.waitForSelector('.ceremony-amount-value', { timeout: 5000 });
   await shot(page, `05-ceremony-${theme}`);
+
+  await page.keyboard.press('Escape');
+
+  /*
+   * Typing in a dialog must actually type.
+   *
+   * Modal's focus effect depended on `onClose`, which every caller passes as an inline
+   * arrow — so the effect tore down and re-ran after each keystroke, yanking the caret back
+   * to the first field. The panel was usable only one character at a time. `fill()` would
+   * not have caught it: it sets the value in one operation. This types key by key, the way
+   * a person does.
+   */
+  await page.click('text=M-PESA credentials');
+  await page.waitForSelector('.page-title', { timeout: 5000 });
+  await page.click('text=Add credentials');
+  await page.waitForSelector('#daraja-title', { timeout: 5000 });
+
+  const shortcode = page.locator('input[inputmode=numeric]').first();
+  await shortcode.click();
+  await shortcode.pressSequentially('600992', { delay: 20 });
+  const typed = await shortcode.inputValue();
+  const stillFocused = await shortcode.evaluate((el) => el === document.activeElement);
+  if (typed !== '600992' || !stillFocused) {
+    errors.push(
+      `[${theme}] typing in a dialog loses the caret: field holds "${typed}" and focus ${stillFocused ? 'held' : 'was lost'}`,
+    );
+  }
+  console.log(`  dialog typing: "${typed}", focus ${stillFocused ? 'held' : 'LOST (BUG)'}`);
+  await shot(page, `08-daraja-${theme}`);
 
   await page.keyboard.press('Escape');
   await page.click('text=Backups');

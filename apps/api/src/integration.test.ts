@@ -736,6 +736,90 @@ suite('SOLVAREN end-to-end', () => {
       expect(transactions[0]!.status).toBe('AWAITING_CALLBACK');
     });
 
+    it('an operator retry of a failed payment actually reaches M-PESA a second time', async () => {
+      /*
+       * The retry endpoint returned 200 and the executor threw the message away. Three
+       * separate guards did it: the fingerprint was re-derived without the retry sequence
+       * and the message was refused as tampered-with, the idempotency claim was looked up by
+       * instruction rather than by fingerprint so the original settled claim answered, and
+       * the batch-state gate admitted only in-flight batches while the common case for a
+       * retry is a batch that has already finished.
+       *
+       * Every one of those failed silently, which is the outcome the whole fingerprint
+       * design exists to prevent: the operator is told the payment was re-sent and it was
+       * not. So this test asserts the only thing that matters — a second request reached the
+       * provider, for the same person and the same amount.
+       */
+      const script = await enableDaraja(scriptDaraja());
+      const seeded = await releaseAndGetMessages();
+      await harness.drain('payments');
+      expect(script.submissions).toHaveLength(1);
+
+      // Settle it as a transient failure, the state a real failed disbursement leaves
+      // behind: ledger FAILED with a retryable provider code, claim spent, batch finished.
+      const transactions = await harness.sql<{ id: string }[]>`
+        UPDATE transactions
+           SET status = 'FAILED', failure_code = '1',
+               failure_reason = 'Insufficient balance in the organization Utility account',
+               failure_class = 'FUNDING', status_source = 'CALLBACK', completed_at = now()
+         WHERE batch_id = ${seeded.batchId}
+        RETURNING id
+      `;
+      await harness.sql`
+        UPDATE idempotency_claims SET state = 'SETTLED'
+         WHERE instruction_id IN (SELECT id FROM payment_instructions WHERE batch_id = ${seeded.batchId})
+      `;
+      await harness.sql`
+        UPDATE payment_batches SET state = 'FAILED' WHERE id = ${seeded.batchId}
+      `;
+
+      // Drive the real endpoint rather than hand-building its queue message, because the
+      // message it builds is precisely what was wrong.
+      const { app } = await import('./index.js');
+      const token = generateSessionToken();
+      await harness.sql`
+        INSERT INTO sessions (organization_id, user_id, token_hash, authenticated_at,
+                              webauthn_verified_at, issued_at, expires_at)
+        VALUES (${ORG}, ${L3}, ${await hashSessionToken(token, harness.env.SESSION_SIGNING_KEY)},
+                now(), now(), now(), now() + interval '1 hour')
+      `;
+
+      const response = await app.fetch(
+        new Request(
+          `https://api.solvaren.test/payments/transactions/${transactions[0]!.id}/retry`,
+          {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
+          },
+        ),
+        harness.env,
+      );
+      expect(response.status).toBe(200);
+      expect(((await response.json()) as { retrySequence: number }).retrySequence).toBe(1);
+
+      await harness.drain('payments');
+
+      // The actual assertion. Before the fix this stayed at 1 while the console said the
+      // payment had been re-sent.
+      expect(script.submissions).toHaveLength(2);
+      expect(script.submissions[1]!.PartyB).toBe(script.submissions[0]!.PartyB);
+      expect(script.submissions[1]!.Amount).toBe(script.submissions[0]!.Amount);
+      // A distinct OriginatorConversationID, or Safaricom rejects it as a duplicate.
+      expect(script.submissions[1]!.OriginatorConversationID).not.toBe(
+        script.submissions[0]!.OriginatorConversationID,
+      );
+
+      // The original settled claim is untouched; the retry has its own.
+      const claims = await harness.sql<{ state: string }[]>`
+        SELECT state FROM idempotency_claims
+         WHERE instruction_id IN (SELECT id FROM payment_instructions WHERE batch_id = ${seeded.batchId})
+         ORDER BY claimed_at
+      `;
+      expect(claims).toHaveLength(2);
+      expect(claims[0]!.state).toBe('SETTLED');
+      expect(claims[1]!.state).toBe('SUBMITTED');
+    });
+
     it('spec 9.3: a redelivered message after submission reconciles instead of paying twice', async () => {
       const script = await enableDaraja(scriptDaraja());
       const seeded = await releaseAndGetMessages();

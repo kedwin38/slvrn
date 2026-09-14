@@ -5,7 +5,7 @@
  * nameable way for a payment console — not for the sake of having a component library.
  */
 
-import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { formatCents, statusTone, type TxnState } from '@solvaren/core';
 
 // ---------------------------------------------------------------------------
@@ -245,24 +245,63 @@ export function Modal({
   const container = useRef<HTMLDivElement>(null);
   const previouslyFocused = useRef<HTMLElement | null>(null);
 
-  useEffect(() => {
-    if (!open) return;
-
-    previouslyFocused.current = document.activeElement as HTMLElement | null;
-
-    const focusable = () =>
+  const focusable = useCallback(
+    () =>
       Array.from(
         container.current?.querySelectorAll<HTMLElement>(
           'button:not(:disabled), [href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])',
         ) ?? [],
-      );
+      ),
+    [],
+  );
 
+  /*
+   * The key handler reads its callbacks from a ref rather than closing over them.
+   *
+   * This is not a micro-optimisation. Every caller passes `onClose={() => setX(false)}`,
+   * a new function identity on every render, so an effect that depended on `onClose` tore
+   * down and re-ran after each keystroke — and its teardown restored focus to the element
+   * that opened the dialog while its setup moved focus to the first field. The visible
+   * result was a form you could only type one character at a time into, because the caret
+   * jumped out of the field on every key.
+   *
+   * Fixing it at each call site would mean every future caller has to remember to memoise,
+   * and a contract that must be remembered is one that will be forgotten. So the dialog
+   * takes callers as they are.
+   */
+  const latest = useRef({ onClose, dismissible });
+  useEffect(() => {
+    latest.current = { onClose, dismissible };
+  });
+
+  // Focus and scroll locking, keyed on `open` alone: these must happen when the dialog
+  // opens and closes, and at no other time.
+  useEffect(() => {
+    if (!open) return;
+
+    previouslyFocused.current = document.activeElement as HTMLElement | null;
     focusable()[0]?.focus();
 
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      // Return focus to whatever opened the dialog, so the keyboard user is not dumped at
+      // the top of the document.
+      previouslyFocused.current?.focus();
+    };
+  }, [open, focusable]);
+
+  // The focus trap. Re-subscribing a listener is harmless; moving focus is not, which is
+  // why this is a separate effect from the one above.
+  useEffect(() => {
+    if (!open) return;
+
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && dismissible) {
+      if (event.key === 'Escape' && latest.current.dismissible) {
         event.preventDefault();
-        onClose();
+        latest.current.onClose();
         return;
       }
       if (event.key !== 'Tab') return;
@@ -282,17 +321,8 @@ export function Modal({
     };
 
     document.addEventListener('keydown', onKeyDown);
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-
-    return () => {
-      document.removeEventListener('keydown', onKeyDown);
-      document.body.style.overflow = previousOverflow;
-      // Return focus to whatever opened the dialog, so the keyboard user is not dumped at
-      // the top of the document.
-      previouslyFocused.current?.focus();
-    };
-  }, [open, onClose, dismissible]);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [open, focusable]);
 
   if (!open) return null;
 

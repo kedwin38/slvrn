@@ -807,10 +807,25 @@ transactionRoutes.post(
         }
         const challengeId = authorization.id;
 
-        const claims = await tx<{ count: string }[]>`
-          SELECT count(*)::text AS count FROM idempotency_claims
+        const claims = await tx<{ count: string; live: string }[]>`
+          SELECT count(*)::text AS count,
+                 count(*) FILTER (WHERE state IN ('CLAIMED', 'SUBMITTED'))::text AS live
+            FROM idempotency_claims
            WHERE instruction_id = ${row.instruction_id}
         `;
+
+        /*
+         * `idempotency_one_live_per_instruction` enforces this too, and is the real
+         * guarantee. Checking it here as well turns a raw constraint violation — a 500 with
+         * a Postgres message in it — into a refusal that says what to do instead.
+         */
+        if (Number(claims[0]?.live ?? '0') > 0) {
+          throw validationError(
+            'RETRY_ALREADY_IN_FLIGHT',
+            'An attempt at this payment is still outstanding. Wait for its outcome rather than sending another.',
+          );
+        }
+
         const retrySequence = Number(claims[0]?.count ?? '1');
         if (retrySequence > MAX_MANUAL_RETRIES) {
           throw validationError(
@@ -859,6 +874,9 @@ transactionRoutes.post(
               challengeId,
               correlationId,
               attempt: 0,
+              // Without this the executor re-derives the original fingerprint, refuses the
+              // message as tampered-with, and the retry silently does nothing.
+              retrySequence,
             },
           },
           tx,

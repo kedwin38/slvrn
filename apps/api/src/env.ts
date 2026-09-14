@@ -157,6 +157,14 @@ export interface PaymentQueueMessage {
   challengeId: string;
   correlationId: string;
   attempt: number;
+  /**
+   * Which deliberate re-attempt this is, for an operator retrying a FAILED payment.
+   *
+   * Absent for an original execution. The executor MUST thread it back into
+   * `instructionFingerprint`, or the fingerprint it re-derives will not match the one the
+   * retry claimed and the message is refused as tampered-with.
+   */
+  retrySequence?: number;
 }
 
 export interface CallbackQueueMessage {
