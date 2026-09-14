@@ -122,6 +122,12 @@ export default tseslint.config(
         console: 'readonly',
         Buffer: 'readonly',
         URL: 'readonly',
+        // Node 18+ web globals. scripts/deploy-check.mjs calls a live deployment over
+        // HTTP, with a timeout, using the runtime's own fetch rather than a dependency.
+        fetch: 'readonly',
+        AbortController: 'readonly',
+        setTimeout: 'readonly',
+        clearTimeout: 'readonly',
         // scripts/ui-check.mjs passes functions to Playwright's `page.evaluate`, which
         // serialises them and runs them in the browser. Those bodies legitimately
         // reference the DOM even though the file itself executes in Node.

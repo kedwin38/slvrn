@@ -71,6 +71,15 @@ COPY --from=build /repo/apps/api/node_modules ./apps/api/node_modules
 COPY db/migrations ./db/migrations
 COPY scripts/migrate.mjs ./scripts/migrate.mjs
 
+# The pre-deploy check runs here too: it verifies the deployment that is live, including
+# whether the console's Content-Security-Policy can actually reach this API — a failure no
+# healthcheck can see, because the browser blocks those requests before they are sent.
+COPY scripts/deploy-check.mjs ./scripts/deploy-check.mjs
+
+# Only ever runs when SEED_DEMO_ACCOUNTS=true, and refuses outright when
+# ENVIRONMENT=production unless explicitly overridden. See the script's own header.
+COPY scripts/seed-demo.mjs ./scripts/seed-demo.mjs
+
 USER solvaren
 
 EXPOSE 8080
