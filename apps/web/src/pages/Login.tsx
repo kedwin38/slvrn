@@ -145,24 +145,17 @@ export function Login({
               <button className="button" data-variant="primary" type="submit" disabled={busy}>
                 {busy ? 'Checking…' : 'Continue'}
               </button>
-
-              <p className="small muted">
-                Finance Control and Executive Authority accounts also require a security key or
-                passkey. SOLVAREN never sends codes by SMS.
-              </p>
             </form>
           ) : (
             <div className="stack">
-              <Notice tone="info">
-                Touch your security key or confirm with your passkey to finish signing in.
-              </Notice>
+              <Notice tone="info">Complete the verification prompt to finish signing in.</Notice>
               <button
                 className="button"
                 data-variant="primary"
                 disabled={busy || !ticket}
                 onClick={() => ticket && void performWebAuthn(ticket, '')}
               >
-                {busy ? 'Waiting for your security key…' : 'Try again'}
+                {busy ? 'Waiting…' : 'Try again'}
               </button>
               <button
                 className="button"
@@ -188,7 +181,7 @@ function asApiError(err: unknown): ApiError {
     return new ApiError(400, {
       code: 'WEBAUTHN_CANCELLED',
       category: 'AUTHENTICATION',
-      message: 'The security key prompt was dismissed or timed out. Try again when ready.',
+      message: 'The verification prompt was dismissed or timed out. Try again when ready.',
     });
   }
   return new ApiError(0, {
@@ -200,7 +193,7 @@ function asApiError(err: unknown): ApiError {
 
 async function requestAssertion(challengeBase64Url: string): Promise<unknown> {
   if (!window.PublicKeyCredential) {
-    throw new Error('This browser does not support security keys.');
+    throw new Error('This browser does not support the required verification method.');
   }
 
   const padded = challengeBase64Url
