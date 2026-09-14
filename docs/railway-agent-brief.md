@@ -2,8 +2,9 @@
 
 Paste the block below into Railway's agent. It is written to be executed without further
 questions, and it front-loads the two things that otherwise cause a crash loop: the object
-storage credentials (the app refuses to boot without them) and the config-file path for
-each service.
+storage credentials (the app refuses to boot without them) and the per-service build and
+deploy settings, which must be set on the service because railway.json is deprecated and
+no longer read.
 
 ---
 
@@ -27,9 +28,13 @@ READ THIS FIRST — the two things that will otherwise fail
 2. Both services build from Dockerfiles that COPY from the REPO ROOT.
    For each service you MUST:
      - leave Root Directory as "/" (do NOT set it to apps/api or apps/web)
-     - set the config-as-code file path explicitly, per service:
-         solvaren-api  ->  apps/api/railway.json
-         solvaren-web  ->  apps/web/railway.json
+     - set the Dockerfile path explicitly, per service:
+         solvaren-api  ->  apps/api/Dockerfile
+         solvaren-web  ->  apps/web/Dockerfile
+     - set the deploy settings listed in each step below IN THE SERVICE
+       SETTINGS. There is no config file to point at: railway.json is
+       deprecated and is NOT read, so anything it once declared has to be set
+       on the service itself.
    If you set Root Directory to the app folder, the Docker build fails because
    it cannot see packages/ or pnpm-lock.yaml.
 
@@ -39,8 +44,8 @@ STEP 1 — PostgreSQL
 
 Add a PostgreSQL database to the project. Name it "Postgres".
 
-Nothing else to configure. The app creates its own schema via a pre-deploy
-migration command (already declared in apps/api/railway.json).
+Nothing else to configure. The app creates its own schema via the pre-deploy
+command set on solvaren-api in Step 2.
 
 ================================================================
 STEP 2 — Service "solvaren-api"
@@ -48,8 +53,14 @@ STEP 2 — Service "solvaren-api"
 
 Source:            GitHub repo above, branch claude/zen-mendel-n0d4x1
 Root Directory:    /
-Config file path:  apps/api/railway.json
-Builder:           Dockerfile (declared in the config file)
+Builder:           Dockerfile
+Dockerfile path:   apps/api/Dockerfile
+
+Deploy settings (set these on the service; there is no config file):
+  Pre-deploy command:  node scripts/predeploy.mjs
+  Healthcheck path:    /health
+  Healthcheck timeout: 30
+  Restart policy:      ON_FAILURE, max 5 retries
 
 Generate a public domain for this service.
 
@@ -98,8 +109,13 @@ STEP 3 — Service "solvaren-web"
 
 Source:            same repo and branch
 Root Directory:    /
-Config file path:  apps/web/railway.json
 Builder:           Dockerfile
+Dockerfile path:   apps/web/Dockerfile
+
+Deploy settings (set these on the service; there is no config file):
+  Healthcheck path:    /healthz
+  Healthcheck timeout: 30
+  Restart policy:      ON_FAILURE, max 5 retries
 
 Generate a public domain for this service.
 
@@ -133,48 +149,36 @@ confirm the policy actually names the API:
 STEP 4 — Object storage (REQUIRED; the API will not boot without it)
 ================================================================
 
-Railway has no S3 service, and the app needs one for encrypted backups.
-Pick ONE of these.
+The app needs S3-compatible storage for encrypted backups and refuses to boot
+without it.
 
-OPTION A (STRONGLY PREFERRED — the user already has Cloudflare R2 enabled):
-  Take this one unless there is a reason not to. It needs no extra service, no
-  volume, no image pull, and no TLS caveat.
+OPTION A (PREFERRED — Railway's own object storage):
+  Railway now has native S3-compatible Buckets. Create one in the SAME REGION
+  as the services and name it "solvaren-backups". No extra service, no volume,
+  no image pull.
 
-  The user's Cloudflare account id is c3807a0785783519c7b9c174ede659ef.
-  Ask them to create an R2 bucket named "solvaren-backups" and an R2 API token
-  scoped to that bucket with read+write. Then:
-    S3_ENDPOINT          = https://c3807a0785783519c7b9c174ede659ef.r2.cloudflarestorage.com
-    S3_BUCKET            = solvaren-backups
-    S3_REGION            = auto
-    S3_ACCESS_KEY_ID     = <R2 access key id>
-    S3_SECRET_ACCESS_KEY = <R2 secret access key>
+  Wire it with variable references, so credentials are never copied by hand:
+    S3_ENDPOINT          = ${{solvaren-backups.ENDPOINT}}
+    S3_BUCKET            = ${{solvaren-backups.BUCKET}}
+    S3_REGION            = ${{solvaren-backups.REGION}}
+    S3_ACCESS_KEY_ID     = ${{solvaren-backups.ACCESS_KEY_ID}}
+    S3_SECRET_ACCESS_KEY = ${{solvaren-backups.SECRET_ACCESS_KEY}}
     S3_FORCE_PATH_STYLE  = false
 
-OPTION B (everything inside Railway — only if Option A is unavailable):
-  Deploy MinIO as a third service in this project.
+  Note S3_BUCKET must be the bucket's BUCKET value, not its display name:
+  Railway appends a hash to keep the real S3 name globally unique. Buckets are
+  virtual-hosted style, which is why S3_FORCE_PATH_STYLE is false.
 
-  DO NOT use the tag `minio/minio:latest`. It has been observed failing on
-  Railway with "could not be pulled from the registry" — MinIO publishes dated
-  release tags, and anonymous Docker Hub pulls are also rate-limited. Look up a
-  current `RELEASE.*` tag on Docker Hub and pin it explicitly, e.g.
-  `minio/minio:RELEASE.<date>`. If the pull still fails, that is a registry or
-  rate-limit problem on Railway's side, not a configuration error — switch to
-  Option A rather than retrying.
+OPTION B (an external provider, e.g. Cloudflare R2 or Backblaze B2):
+  Create a bucket and a key pair scoped to it with PutObject, GetObject,
+  HeadObject and DeleteObject and nothing else. Then set the same six
+  variables with that provider's endpoint, bucket, region and credentials.
 
-  Command: server /data --console-address ":9001"
-  Give it a volume mounted at /data and set MINIO_ROOT_USER and
-  MINIO_ROOT_PASSWORD. Create a bucket "solvaren-backups". Then:
-    S3_ENDPOINT          = http://minio.railway.internal:9000
-    S3_BUCKET            = solvaren-backups
-    S3_REGION            = us-east-1
-    S3_ACCESS_KEY_ID     = <MINIO_ROOT_USER>
-    S3_SECRET_ACCESS_KEY = <MINIO_ROOT_PASSWORD>
-    S3_FORCE_PATH_STYLE  = true      <-- MinIO requires path-style; this matters
-
-  Note for Option B: that endpoint is http:// on Railway's private network,
-  which the config validator allows for ENVIRONMENT=staging but REFUSES for
-  ENVIRONMENT=production. If this ever moves to ENVIRONMENT=production, MinIO
-  needs TLS or the storage moves to Option A.
+DO NOT run MinIO for this. It was tried here and cost an afternoon: the image
+tag must be an exact `RELEASE.*` string (`latest` and date-like tags such as
+`2024.10.02` do not exist and fail with "could not be pulled from the
+registry"), anonymous Docker Hub pulls are rate-limited, and it needs a volume
+and a service of its own to do what Option A does with none.
 
 Whichever you pick, fill the S3_* variables on solvaren-api from Step 2.
 
@@ -240,8 +244,7 @@ DO NOT
 ================================================================
 
 - Do not set PORT on either service.
-- Do not put any secret value into railway.json, a Dockerfile, or any committed
-  file. Secrets are Railway variables only. The repo's CI fails the build if a
+- Do not put any secret value into a Dockerfile or any other committed file. Secrets are Railway variables only. The repo's CI fails the build if a
   secret literal appears in a deployment manifest.
 - Do not set ENVIRONMENT=production together with DARAJA_ENVIRONMENT=production
   unless the user explicitly asks. That combination configures the system to

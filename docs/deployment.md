@@ -2,16 +2,15 @@
 
 SOLVAREN runs as two Railway services and one database:
 
-| Service        | What it is                                                 | Image                 |
-| -------------- | ---------------------------------------------------------- | --------------------- |
-| `solvaren-api` | Hono HTTP API, the four queue consumers, and the scheduler | `apps/api/Dockerfile` |
-| `solvaren-web` | The console, static, behind nginx                          | `apps/web/Dockerfile` |
-| `Postgres`     | System of record, job queue, rate limiter                  | Railway PostgreSQL    |
+| Service        | What it is                                                 | Image                  |
+| -------------- | ---------------------------------------------------------- | ---------------------- |
+| `solvaren-api` | Hono HTTP API, the four queue consumers, and the scheduler | `apps/api/Dockerfile`  |
+| `solvaren-web` | The console, static, behind nginx                          | `apps/web/Dockerfile`  |
+| `Postgres`     | System of record, job queue, rate limiter                  | Railway PostgreSQL     |
+| a Bucket       | Encrypted backups                                          | Railway Storage Bucket |
 
-Object storage is **not** on Railway. Railway has no S3 service, so backups go to any
-S3-compatible target you already have — Cloudflare R2, Backblaze B2, AWS S3, or MinIO run
-as a fourth Railway service. Spec BAK-001 always required an S3-compatible target, so this
-is not a concession.
+Spec BAK-001 always required an S3-compatible target. Railway's own Buckets are one, so
+backups no longer need an outside provider — though any S3-compatible target still works.
 
 ---
 
@@ -39,9 +38,16 @@ application's `DATABASE_URL`.
 
 ### 2. Object storage
 
-Create a bucket and a scoped key pair. The key needs `PutObject`, `GetObject`,
-`HeadObject` and `DeleteObject` on that bucket and nothing else — SOLVAREN never lists
-buckets and never touches another prefix.
+Railway has native S3-compatible **Buckets**; create one in the same region as the
+services. Wire it with variable references (`${{<bucket>.ENDPOINT}}`, `.BUCKET`, `.REGION`,
+`.ACCESS_KEY_ID`, `.SECRET_ACCESS_KEY`) rather than copying credentials. `S3_BUCKET` must
+be the bucket's `BUCKET` value, not its display name — Railway appends a hash to keep the
+real S3 name unique — and `S3_FORCE_PATH_STYLE` is `false`, because buckets are
+virtual-hosted style.
+
+With any other provider, create a bucket and a scoped key pair. The key needs `PutObject`,
+`GetObject`, `HeadObject` and `DeleteObject` on that bucket and nothing else — SOLVAREN
+never lists buckets and never touches another prefix.
 
 ### 3. Secrets
 
@@ -56,31 +62,31 @@ openssl rand -base64 48   # CALLBACK_SHARED_SECRET
 ```
 
 Set them as Railway variables on `solvaren-api`. They are never committed; the invariant
-check fails the build if a secret is assigned a literal value in any Dockerfile,
-`railway.json` or workflow file.
+check fails the build if a secret is assigned a literal value in any Dockerfile or
+workflow file.
 
 ### 4. API service variables
 
-| Variable                 | Example                                           | Notes                                                                       |
-| ------------------------ | ------------------------------------------------- | --------------------------------------------------------------------------- |
-| `DATABASE_URL`           | `${{Postgres.DATABASE_PRIVATE_URL}}`              | **Private** URL — not `DATABASE_URL`, which is the public proxy             |
-| `SESSION_SIGNING_KEY`    | _(generated)_                                     | ≥ 32 chars, refused otherwise                                               |
-| `SECRET_ENCRYPTION_KEY`  | _(generated)_                                     | ≥ 32 chars, must differ from the above                                      |
-| `CALLBACK_SHARED_SECRET` | _(generated)_                                     | Daraja callback authentication (§9.4)                                       |
-| `ENVIRONMENT`            | `production`                                      | `development` \| `staging` \| `production`                                  |
-| `APP_ORIGIN`             | `https://${{solvaren-web.RAILWAY_PUBLIC_DOMAIN}}` | Must match the console's public URL exactly; the reference keeps it in step |
-| `API_BASE_URL`           | `https://api.solvaren.example`                    | Used to build provider callback URLs                                        |
-| `WEBAUTHN_RP_ID`         | `${{solvaren-web.RAILWAY_PUBLIC_DOMAIN}}`         | Must equal the `APP_ORIGIN` host or be a registrable parent                 |
-| `DARAJA_ENVIRONMENT`     | `sandbox`                                         | `production` is refused unless `ENVIRONMENT=production`                     |
-| `S3_ENDPOINT`            | `https://s3.eu-central-003.backblazeb2.com`       |                                                                             |
-| `S3_BUCKET`              | `solvaren-backups`                                |                                                                             |
-| `S3_REGION`              | `auto`                                            |                                                                             |
-| `S3_ACCESS_KEY_ID`       | _(from step 2)_                                   |                                                                             |
-| `S3_SECRET_ACCESS_KEY`   | _(from step 2)_                                   |                                                                             |
-| `S3_FORCE_PATH_STYLE`    | `false`                                           | `true` for MinIO                                                            |
-| `AI_API_KEY`             | _(optional)_                                      | Omit to disable the AI layer entirely                                       |
-| `RUN_WORKERS`            | `true`                                            | `false` for a web-only replica                                              |
-| `RUN_SCHEDULER`          | `true`                                            | Safe on every replica; advisory-locked                                      |
+| Variable                 | Example                                           | Notes                                                                        |
+| ------------------------ | ------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `DATABASE_URL`           | `${{Postgres.DATABASE_PRIVATE_URL}}`              | **Private** URL — not `DATABASE_URL`, which is the public proxy              |
+| `SESSION_SIGNING_KEY`    | _(generated)_                                     | ≥ 32 chars, refused otherwise                                                |
+| `SECRET_ENCRYPTION_KEY`  | _(generated)_                                     | ≥ 32 chars, must differ from the above                                       |
+| `CALLBACK_SHARED_SECRET` | _(generated)_                                     | Daraja callback authentication (§9.4)                                        |
+| `ENVIRONMENT`            | `production`                                      | `development` \| `staging` \| `production`                                   |
+| `APP_ORIGIN`             | `https://${{solvaren-web.RAILWAY_PUBLIC_DOMAIN}}` | Must match the console's public URL exactly; the reference keeps it in step  |
+| `API_BASE_URL`           | `https://api.solvaren.example`                    | Used to build provider callback URLs                                         |
+| `WEBAUTHN_RP_ID`         | `${{solvaren-web.RAILWAY_PUBLIC_DOMAIN}}`         | Must equal the `APP_ORIGIN` host or be a registrable parent                  |
+| `DARAJA_ENVIRONMENT`     | `sandbox`                                         | `production` is refused unless `ENVIRONMENT=production`                      |
+| `S3_ENDPOINT`            | `${{solvaren-backups.ENDPOINT}}`                  | A Railway Bucket, or any S3-compatible endpoint                              |
+| `S3_BUCKET`              | `${{solvaren-backups.BUCKET}}`                    | The `BUCKET` value, **not** the bucket's display name                        |
+| `S3_REGION`              | `${{solvaren-backups.REGION}}`                    |                                                                              |
+| `S3_ACCESS_KEY_ID`       | `${{solvaren-backups.ACCESS_KEY_ID}}`             |                                                                              |
+| `S3_SECRET_ACCESS_KEY`   | `${{solvaren-backups.SECRET_ACCESS_KEY}}`         |                                                                              |
+| `S3_FORCE_PATH_STYLE`    | `false`                                           | Railway Buckets are virtual-hosted style; `true` only for path-style targets |
+| `AI_API_KEY`             | _(optional)_                                      | Omit to disable the AI layer entirely                                        |
+| `RUN_WORKERS`            | `true`                                            | `false` for a web-only replica                                               |
+| `RUN_SCHEDULER`          | `true`                                            | Safe on every replica; advisory-locked                                       |
 
 `PORT` is injected by Railway. Do not set it.
 
@@ -91,10 +97,17 @@ not.
 
 ### 5. Deploy the API
 
-`railway.json` sets `preDeployCommand` to `node scripts/migrate.mjs`, so migrations run
-before the new image takes traffic. The migrator takes an advisory lock, so two replicas
-released together do not race, and it refuses to run if an already-applied migration file
-has been edited.
+The service's **pre-deploy command** is `node scripts/predeploy.mjs`, which migrates, then
+optionally seeds, then checks the deployment that is still live. Migrations run before the
+new image takes traffic; the migrator takes an advisory lock, so two replicas released
+together do not race, and it refuses to run if an already-applied migration file has been
+edited.
+
+Set it in the service's deploy settings. Railway's config-as-code (`railway.json`,
+`railway.toml`) is **deprecated and is not read**, so a committed config file will be
+silently ignored — the repo used to carry one, and every setting in it was inert. Its
+replacement is [Infrastructure as Code](https://docs.railway.com/infrastructure-as-code)
+(`.railway/railway.ts`), applied with the Railway CLI.
 
 Verify:
 
