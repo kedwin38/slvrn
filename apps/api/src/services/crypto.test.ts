@@ -12,6 +12,7 @@ import {
   encryptSecret,
   decryptSecret,
   ARGON2_PARAMS,
+  sha256Hex,
 } from './crypto.js';
 
 describe('Argon2id password hashing (§7.2)', () => {
@@ -171,5 +172,20 @@ describe('secret envelope encryption (§8.4)', () => {
     await expect(decryptSecret('AAAA', masterKey)).rejects.toMatchObject({
       code: 'SECRET_MALFORMED',
     });
+  });
+});
+
+describe('sha256Hex', () => {
+  it('matches the digest a plain node:crypto script produces', async () => {
+    // scripts/issue-enrolment-token.mjs stores createHash('sha256').digest('hex'); the API
+    // compares with this. If the two ever disagree, no enrolment token would validate.
+    const { createHash } = await import('node:crypto');
+    for (const value of ['', 'token', 'zBr4JVEV3l_v88dx4K6_ehifzoZLe63JtbBAEef8EwU']) {
+      expect(await sha256Hex(value)).toBe(createHash('sha256').update(value).digest('hex'));
+    }
+  });
+
+  it('produces 64 lowercase hex characters', async () => {
+    expect(await sha256Hex('anything')).toMatch(/^[0-9a-f]{64}$/);
   });
 });

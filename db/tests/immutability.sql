@@ -462,6 +462,74 @@ SELECT assert_refused($$
 $$, 'a settled job cannot be reopened and paid again');
 
 -- ---------------------------------------------------------------------------
+-- Enrolment tokens: single use, and a spent one is evidence
+--
+-- These tokens are the only way to put the first authenticator on an L2/L3 account, and
+-- that account is the only thing that can release a payment. A token that could be replayed,
+-- or quietly re-pointed at a different credential after the fact, would be a way to attach
+-- an attacker's key to an executive account and leave no usable trace.
+-- ---------------------------------------------------------------------------
+DO $$
+DECLARE org_id uuid; user_id uuid;
+BEGIN
+    INSERT INTO organizations (name, slug) VALUES ('Enrolment Test', 'enrolment-test')
+    RETURNING id INTO org_id;
+
+    INSERT INTO users (organization_id, email, full_name, authority_level, password_hash, status)
+    VALUES (org_id, 'enrol@test.invalid', 'Enrolment Test', 'L1', 'x', 'PENDING_ENROLMENT')
+    RETURNING id INTO user_id;
+
+    INSERT INTO enrolment_tokens (id, organization_id, user_id, token_hash, expires_at)
+    VALUES ('00000000-0000-0000-0000-0000000e1001'::uuid, org_id, user_id,
+            'hash-one', now() + interval '30 minutes');
+
+    -- Spend it, as the API does.
+    UPDATE enrolment_tokens
+       SET consumed_at = now(), credential_id = 'credential-one'
+     WHERE id = '00000000-0000-0000-0000-0000000e1001'::uuid;
+
+    RAISE NOTICE 'PASS  an enrolment token can be issued and consumed once';
+END $$;
+
+SELECT assert_refused($$
+    UPDATE enrolment_tokens SET consumed_at = NULL, credential_id = NULL
+     WHERE id = '00000000-0000-0000-0000-0000000e1001'::uuid
+$$, 'a consumed enrolment token cannot be marked unused again');
+
+SELECT assert_refused($$
+    UPDATE enrolment_tokens SET credential_id = 'some-other-credential'
+     WHERE id = '00000000-0000-0000-0000-0000000e1001'::uuid
+$$, 'a consumed enrolment token cannot be re-pointed at another credential');
+
+-- Two live tokens for one user would mean a token seen over a shoulder and a token issued
+-- later both work.
+DO $$
+DECLARE org_id uuid; user_id uuid;
+BEGIN
+    SELECT u.id, u.organization_id INTO user_id, org_id
+      FROM users u WHERE u.email = 'enrol@test.invalid';
+
+    INSERT INTO enrolment_tokens (organization_id, user_id, token_hash, expires_at)
+    VALUES (org_id, user_id, 'hash-live-a', now() + interval '30 minutes');
+
+    BEGIN
+        INSERT INTO enrolment_tokens (organization_id, user_id, token_hash, expires_at)
+        VALUES (org_id, user_id, 'hash-live-b', now() + interval '30 minutes');
+        RAISE EXCEPTION 'FAIL  a user was allowed two live enrolment tokens';
+    EXCEPTION WHEN unique_violation THEN
+        RAISE NOTICE 'PASS  only one enrolment token may be outstanding per user';
+    END;
+END $$;
+
+-- A consumed token must say which credential it produced, so the question "did this token
+-- create that key?" is answerable from the row itself.
+SELECT assert_refused($$
+    INSERT INTO enrolment_tokens (organization_id, user_id, token_hash, expires_at, consumed_at)
+    SELECT u.organization_id, u.id, 'hash-no-credential', now() + interval '30 minutes', now()
+      FROM users u WHERE u.email = 'enrol@test.invalid'
+$$, 'a consumed enrolment token must record the credential it produced');
+
+-- ---------------------------------------------------------------------------
 -- Tenant scoping: every tenant-owned table carries organization_id NOT NULL
 -- ---------------------------------------------------------------------------
 DO $$

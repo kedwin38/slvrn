@@ -159,8 +159,28 @@ railway run --service solvaren-api node scripts/create-user.mjs \
   --organization "Acme Holdings" --email ceo@acme.example --level L3
 ```
 
-Then enrol a security key immediately. L2 and L3 sessions are refused without WebAuthn, so
-an L3 account without a key cannot do anything.
+That account is created `PENDING_ENROLMENT` and cannot sign in yet: L2 and L3 sessions are
+refused without a verified WebAuthn assertion, and the endpoint that enrols a key needs a
+session. Break the circle with a single-use enrolment token:
+
+```bash
+railway run --service solvaren-api node scripts/issue-enrolment-token.mjs \
+  --email ceo@acme.example
+```
+
+It prints the token once — only a SHA-256 hash is stored, so it cannot be recovered. Open
+the console, choose **Enrol a security key** on the sign-in page, and give the email,
+password and token. That registers one authenticator, spends the token, and moves the
+account to `ACTIVE`. It issues no session: sign in normally afterwards.
+
+Both factors are required on purpose. A password alone would let a stolen password become
+an L3 who can release payments, which is the bypass the WebAuthn requirement exists to
+prevent. The token also refuses any account that already has a working key — adding a
+second key is an authenticated action from inside the console — so it is a bootstrap, not
+an account-takeover primitive.
+
+**Enrol two keys for an L3.** It is the only level that can release a payment, and recovery
+from a single lost key is deliberately slow.
 
 ### 8. Daraja
 

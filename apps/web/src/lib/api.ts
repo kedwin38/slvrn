@@ -439,6 +439,31 @@ export const api = {
 
     session: () => request<SessionResponse>('/auth/session'),
     logout: () => request<{ signedOut: boolean }>('/auth/logout', { method: 'POST' }),
+
+    /*
+     * Enrolling the FIRST authenticator on an L2/L3 account.
+     *
+     * Unauthenticated by necessity — those accounts cannot hold a session until a key
+     * exists — so it is gated on the password plus a single-use token issued out of band.
+     * It registers one credential and issues no session: sign in normally afterwards.
+     */
+    enrolmentOptions: (email: string, password: string, token: string) =>
+      request<{ challenge: string; user: { id: string; name: string; displayName: string } }>(
+        '/auth/enrolment/options',
+        { method: 'POST', body: { email, password, token } },
+      ),
+
+    completeEnrolment: (
+      email: string,
+      password: string,
+      token: string,
+      response: unknown,
+      friendlyName?: string,
+    ) =>
+      request<{ registered: boolean; credentialId: string }>('/auth/enrolment/complete', {
+        method: 'POST',
+        body: { email, password, token, response, friendlyName },
+      }),
   },
 
   transactions: {

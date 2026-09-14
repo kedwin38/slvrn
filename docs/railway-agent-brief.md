@@ -280,8 +280,16 @@ railway run --service solvaren-api node scripts/create-user.mjs \
   --organization "Your Company" --email you@example.com --level L3
 ```
 
-Then enrol a security key immediately: L2 and L3 sessions are refused without WebAuthn, so
-an L3 account without a key can do nothing.
+That account cannot sign in yet — L2 and L3 need a WebAuthn key, and enrolling one
+normally needs a session. Issue a single-use enrolment token:
+
+```bash
+railway run --service solvaren-api node scripts/issue-enrolment-token.mjs \
+  --email you@example.com
+```
+
+Then use **Enrol a security key** on the sign-in page with the email, password and token.
+Enrol two keys for an L3: it is the only level that can release a payment.
 
 **Put something in front of the API.** There is no WAF, no managed DDoS protection and no
 rate limiting at the edge — that all came from Cloudflare and did not survive the move.

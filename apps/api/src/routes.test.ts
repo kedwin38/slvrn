@@ -102,6 +102,140 @@ suite('HTTP routes', () => {
   }
 
   // =========================================================================
+  // First-authenticator enrolment
+  //
+  // This is the only unauthenticated path that can attach a credential to an account, and
+  // the account it attaches to may be the L3 that releases payments. Each refusal below is
+  // the difference between a bootstrap and an account-takeover primitive.
+  // =========================================================================
+
+  describe('first-authenticator enrolment', () => {
+    const sha256Hex = async (value: string) => {
+      const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
+      return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
+    };
+
+    async function issueToken(userId: string, token: string, expiresIn = '30 minutes') {
+      await harness.sql`DELETE FROM enrolment_tokens WHERE user_id = ${userId} AND consumed_at IS NULL`;
+      await harness.sql`
+        INSERT INTO enrolment_tokens (organization_id, user_id, token_hash, expires_at)
+        VALUES (${ORG}, ${userId}, ${await sha256Hex(token)},
+                now() + ${expiresIn}::interval)
+      `;
+    }
+
+    const begin = (body: Record<string, unknown>) =>
+      call('/auth/enrolment/options', { method: 'POST', body });
+
+    it('issues registration options for a valid password and token', async () => {
+      await issueToken(USERS.L3, 'a-valid-enrolment-token-0001');
+      const response = await begin({
+        email: 'l3@route.test',
+        password: 'correct horse battery staple',
+        token: 'a-valid-enrolment-token-0001',
+      });
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as { challenge?: string };
+      expect(typeof body.challenge).toBe('string');
+    });
+
+    it('refuses the correct token with the wrong password', async () => {
+      await issueToken(USERS.L3, 'a-valid-enrolment-token-0002');
+      const response = await begin({
+        email: 'l3@route.test',
+        password: 'not the password',
+        token: 'a-valid-enrolment-token-0002',
+      });
+      expect(response.status).toBe(401);
+    });
+
+    it('refuses the correct password with a wrong token', async () => {
+      await issueToken(USERS.L3, 'a-valid-enrolment-token-0003');
+      const response = await begin({
+        email: 'l3@route.test',
+        password: 'correct horse battery staple',
+        token: 'some-other-token-entirely-0003',
+      });
+      expect(response.status).toBe(401);
+    });
+
+    it('refuses an expired token', async () => {
+      await harness.sql`DELETE FROM enrolment_tokens WHERE user_id = ${USERS.L3} AND consumed_at IS NULL`;
+      await harness.sql`
+        INSERT INTO enrolment_tokens (organization_id, user_id, token_hash, issued_at, expires_at)
+        VALUES (${ORG}, ${USERS.L3}, ${await sha256Hex('an-expired-token-0004')},
+                now() - interval '2 hours', now() - interval '1 hour')
+      `;
+      const response = await begin({
+        email: 'l3@route.test',
+        password: 'correct horse battery staple',
+        token: 'an-expired-token-0004',
+      });
+      expect(response.status).toBe(401);
+    });
+
+    it('refuses a token already spent', async () => {
+      await issueToken(USERS.L3, 'a-spent-token-0005');
+      await harness.sql`
+        UPDATE enrolment_tokens SET consumed_at = now(), credential_id = 'already-used'
+         WHERE user_id = ${USERS.L3} AND consumed_at IS NULL
+      `;
+      const response = await begin({
+        email: 'l3@route.test',
+        password: 'correct horse battery staple',
+        token: 'a-spent-token-0005',
+      });
+      expect(response.status).toBe(401);
+    });
+
+    it('refuses an account that already has an authenticator', async () => {
+      await issueToken(USERS.L2, 'a-valid-enrolment-token-0006');
+      await harness.sql`
+        INSERT INTO webauthn_credentials (
+          organization_id, user_id, credential_id, public_key, signature_counter,
+          transports, device_type, backed_up, friendly_name
+        ) VALUES (
+          ${ORG}, ${USERS.L2}, ${'existing-credential-0006'}, ${Buffer.from([1, 2, 3])}, 0,
+          '{}'::text[], 'CROSS_PLATFORM', false, 'Existing key'
+        )
+      `;
+      const response = await begin({
+        email: 'l2@route.test',
+        password: 'correct horse battery staple',
+        token: 'a-valid-enrolment-token-0006',
+      });
+      expect(response.status).toBe(401);
+
+      await harness.sql`DELETE FROM webauthn_credentials WHERE credential_id = 'existing-credential-0006'`;
+    });
+
+    it('gives the same refusal for every failure, so it is not an oracle', async () => {
+      await issueToken(USERS.L3, 'a-valid-enrolment-token-0007');
+      const [wrongPassword, wrongToken, unknownAccount] = await Promise.all([
+        begin({ email: 'l3@route.test', password: 'wrong', token: 'a-valid-enrolment-token-0007' }),
+        begin({
+          email: 'l3@route.test',
+          password: 'correct horse battery staple',
+          token: 'wrong-token-000000000007',
+        }),
+        begin({
+          email: 'nobody@route.test',
+          password: 'correct horse battery staple',
+          token: 'a-valid-enrolment-token-0007',
+        }),
+      ]);
+
+      const codes = await Promise.all(
+        [wrongPassword, wrongToken, unknownAccount].map(async (r) => {
+          const body = (await r.json()) as { error?: { code?: string; message?: string } };
+          return `${r.status}:${body.error?.code}:${body.error?.message}`;
+        }),
+      );
+      expect(new Set(codes).size).toBe(1);
+    });
+  });
+
+  // =========================================================================
   // Authentication
   // =========================================================================
 

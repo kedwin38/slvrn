@@ -161,6 +161,18 @@ export function uuidArrayValue(sql: Sql, ids: readonly string[]) {
   return sql`(SELECT COALESCE(ARRAY(SELECT jsonb_array_elements_text(${sql.json([...ids] as never)}::jsonb)::uuid), '{}'::uuid[]))`;
 }
 
+/**
+ * A `text[]` *value*, for a column: `VALUES (..., ${textArrayValue(sql, transports)}, ...)`.
+ *
+ * The pool runs with `fetch_types: false`, so the driver cannot look up the column's array
+ * type and a plain JS array is sent as a string Postgres then refuses: `malformed array
+ * literal: "internal"`. Going through jsonb makes the type explicit in the SQL itself,
+ * exactly as the uuid helpers above do.
+ */
+export function textArrayValue(sql: Sql, values: readonly string[]) {
+  return sql`(SELECT COALESCE(ARRAY(SELECT jsonb_array_elements_text(${sql.json([...values] as never)}::jsonb)), '{}'::text[]))`;
+}
+
 /** Assert exactly one row came back, with a caller-supplied not-found error. */
 export function exactlyOne<T>(rows: readonly T[], onMissing: () => Error): T {
   const first = rows[0];

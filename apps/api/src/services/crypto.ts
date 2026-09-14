@@ -192,6 +192,18 @@ export async function sha256Base64Url(input: string): Promise<string> {
   return toBase64Url(new Uint8Array(digest));
 }
 
+/**
+ * Hex SHA-256, for values stored by a plain `node:crypto` script and compared here.
+ *
+ * scripts/issue-enrolment-token.mjs writes the hash of an enrolment token with
+ * createHash('sha256').digest('hex'); this is the same digest in the same encoding, so the
+ * two agree without either side depending on the other's base64 variant.
+ */
+export async function sha256Hex(input: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', encoder.encode(input));
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
 /** Recovery codes: four groups of Crockford base32, shown once and stored hashed. */
 export function generateRecoveryCode(): string {
   const alphabet = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';

@@ -40,12 +40,13 @@ import {
   verifyPassword,
   generateRecoveryCode,
   hashSessionToken,
+  sha256Hex,
   timingSafeEqual,
   fromBase64Url,
   toBase64Url,
 } from '../services/crypto.js';
 import { requireAuth, actorOf, limitBodySize } from '../middleware/security.js';
-import { withConnection, inTransaction } from '../db/client.js';
+import { withConnection, inTransaction, textArrayValue } from '../db/client.js';
 import { writeAuditEvent } from '../db/audit-writer.js';
 import type { AppContext } from '../env.js';
 
@@ -469,7 +470,7 @@ authRoutes.post('/webauthn/register', requireAuth, async (c) => {
         ) VALUES (
           ${actor.organizationId}, ${actor.userId}, ${info.credential.id},
           ${Buffer.from(info.credential.publicKey)}, ${info.credential.counter},
-          ${info.credential.transports ?? []}, ${info.credentialDeviceType === 'multiDevice' ? 'PLATFORM' : 'CROSS_PLATFORM'},
+          ${textArrayValue(tx, info.credential.transports ?? [])}, ${info.credentialDeviceType === 'multiDevice' ? 'PLATFORM' : 'CROSS_PLATFORM'},
           ${info.credentialBackedUp}, ${body.friendlyName ?? 'Security key'}, ${info.aaguid ?? null}
         )
       `;
@@ -698,3 +699,226 @@ void toBase64Url;
 
 type AuthenticatorTransportFuture =
   'ble' | 'cable' | 'hybrid' | 'internal' | 'nfc' | 'smart-card' | 'usb';
+
+/*
+ * ───────────────────────────────────────────────────────────────────────────────
+ * First-authenticator enrolment (the bootstrap for L2 and L3)
+ *
+ * Registering an authenticator above requires a session. L2 and L3 cannot hold a session
+ * without a verified assertion. So the first privileged account in an organisation could
+ * never sign in at all — and L3 is the only level that can release a payment.
+ *
+ * These two endpoints are the way in, and they are deliberately narrow:
+ *
+ *   - They need the password AND a single-use token issued out of band
+ *     (scripts/issue-enrolment-token.mjs). Letting a password alone enrol the first key
+ *     would make a stolen password into an L3 who can move money, which is the exact
+ *     bypass the WebAuthn requirement exists to prevent.
+ *   - They refuse any account that already has a working authenticator. Adding a key to a
+ *     live account stays an authenticated action; otherwise this would be an
+ *     account-takeover primitive rather than a bootstrap.
+ *   - They never issue a session. Success means one credential exists; the user then signs
+ *     in normally, password plus key, through the ordinary two-stage flow.
+ * ───────────────────────────────────────────────────────────────────────────────
+ */
+
+const enrolmentSchema = z.object({
+  email: z.string().trim().email().max(320),
+  password: z.string().min(1).max(1024),
+  token: z.string().trim().min(16).max(200),
+});
+
+interface EnrolmentCandidate {
+  user: UserRow;
+  tokenId: string;
+}
+
+/**
+ * Establish that this request may enrol a first authenticator, or refuse.
+ *
+ * Every refusal returns the same message. Distinguishing "no such token" from "wrong
+ * password" from "already enrolled" would turn this endpoint into an oracle for which
+ * privileged accounts exist and which are still unprotected — precisely the accounts worth
+ * attacking.
+ */
+async function resolveEnrolment(
+  sql: Parameters<typeof writeAuditEvent>[0],
+  input: z.infer<typeof enrolmentSchema>,
+): Promise<EnrolmentCandidate> {
+  const refuse = () =>
+    authenticationError(
+      'ENROLMENT_REFUSED',
+      'That enrolment could not be completed. Check the email, password and token, and that the token has not expired or already been used.',
+    );
+
+  const stage = await verifyPasswordStage(sql, {
+    email: input.email,
+    password: input.password,
+    deviceFingerprint: null,
+    ip: null,
+    userAgent: null,
+  }).catch(() => null);
+
+  if (!stage) throw refuse();
+
+  const existing = await sql<{ credential_id: string }[]>`
+    SELECT credential_id FROM webauthn_credentials
+     WHERE user_id = ${stage.user.id} AND status = 'ACTIVE' LIMIT 1
+  `;
+  if (existing.length > 0) throw refuse();
+
+  const tokens = await sql<{ id: string }[]>`
+    SELECT id FROM enrolment_tokens
+     WHERE user_id = ${stage.user.id}
+       AND token_hash = ${await sha256Hex(input.token)}
+       AND consumed_at IS NULL
+       AND expires_at > now()
+     LIMIT 1
+  `;
+  const token = tokens[0];
+  if (!token) throw refuse();
+
+  return { user: stage.user, tokenId: token.id };
+}
+
+/** POST /auth/enrolment/options — begin enrolling the first authenticator. */
+authRoutes.post('/enrolment/options', async (c) => {
+  const body = enrolmentSchema.parse(await c.req.json());
+
+  const options = await withConnection(c.env, async (sql) => {
+    const { user } = await resolveEnrolment(sql, body);
+
+    const generated = await generateRegistrationOptions({
+      rpName: c.env.WEBAUTHN_RP_NAME,
+      rpID: c.env.WEBAUTHN_RP_ID,
+      userName: user.email,
+      userDisplayName: user.full_name,
+      attestationType: 'none',
+      authenticatorSelection: { residentKey: 'preferred', userVerification: 'required' },
+    });
+
+    // The challenge lives server-side, as it does for the authenticated path.
+    await sql`
+      INSERT INTO security_events (organization_id, user_id, event_type, severity, description, detail)
+      VALUES (${user.organization_id}, ${user.id}, 'WEBAUTHN_REGISTRATION_STARTED', 'INFO',
+              ${'A first-authenticator enrolment was started from an enrolment token'},
+              ${sql.json({ challenge: generated.challenge })})
+    `;
+    return generated;
+  });
+
+  return c.json(options);
+});
+
+/** POST /auth/enrolment/complete — register the authenticator and spend the token. */
+authRoutes.post('/enrolment/complete', async (c) => {
+  const body = enrolmentSchema
+    .extend({
+      response: z.record(z.unknown()),
+      friendlyName: z.string().trim().max(80).optional(),
+    })
+    .parse(await c.req.json());
+  const correlationId = c.get('correlationId');
+
+  const result = await withConnection(c.env, async (sql) => {
+    const { user, tokenId } = await resolveEnrolment(sql, body);
+
+    const events = await sql<{ detail: { challenge: string } }[]>`
+      SELECT detail FROM security_events
+       WHERE user_id = ${user.id} AND event_type = 'WEBAUTHN_REGISTRATION_STARTED'
+         AND created_at > now() - interval '10 minutes'
+       ORDER BY created_at DESC LIMIT 1
+    `;
+    const pending = events[0];
+    if (!pending) {
+      throw validationError(
+        'WEBAUTHN_REGISTRATION_EXPIRED',
+        'That enrolment expired. Start again.',
+      );
+    }
+
+    const verification = await verifyRegistrationResponse({
+      response: body.response as never,
+      expectedChallenge: pending.detail.challenge,
+      expectedOrigin: c.env.APP_ORIGIN,
+      expectedRPID: c.env.WEBAUTHN_RP_ID,
+      requireUserVerification: true,
+    });
+
+    if (!verification.verified || !verification.registrationInfo) {
+      throw validationError(
+        'WEBAUTHN_REGISTRATION_FAILED',
+        'The authenticator could not be registered',
+      );
+    }
+
+    const info = verification.registrationInfo;
+
+    await inTransaction(sql, async (tx) => {
+      await tx`
+        INSERT INTO webauthn_credentials (
+          organization_id, user_id, credential_id, public_key, signature_counter,
+          transports, device_type, backed_up, friendly_name, aaguid
+        ) VALUES (
+          ${user.organization_id}, ${user.id}, ${info.credential.id},
+          ${Buffer.from(info.credential.publicKey)}, ${info.credential.counter},
+          ${textArrayValue(tx, info.credential.transports ?? [])},
+          ${info.credentialDeviceType === 'multiDevice' ? 'PLATFORM' : 'CROSS_PLATFORM'},
+          ${info.credentialBackedUp}, ${body.friendlyName ?? 'First security key'},
+          ${info.aaguid ?? null}
+        )
+      `;
+
+      /*
+       * Spend the token in the same transaction that creates the credential, conditioned on
+       * it still being unconsumed. Two enrolments racing the same token cannot both land:
+       * the second updates zero rows and the whole transaction is abandoned.
+       */
+      const spent = await tx<{ id: string }[]>`
+        UPDATE enrolment_tokens
+           SET consumed_at = now(), credential_id = ${info.credential.id}
+         WHERE id = ${tokenId} AND consumed_at IS NULL
+        RETURNING id
+      `;
+      if (spent.length === 0) {
+        throw authenticationError(
+          'ENROLMENT_REFUSED',
+          'That enrolment could not be completed. Check the email, password and token, and that the token has not expired or already been used.',
+        );
+      }
+
+      /*
+       * An account created by scripts/create-user.mjs sits at PENDING_ENROLMENT precisely
+       * until this moment. Activating anything else would be wrong, so the status change is
+       * conditioned on that exact value rather than written unconditionally.
+       */
+      await tx`
+        UPDATE users SET status = 'ACTIVE'
+         WHERE id = ${user.id} AND status = 'PENDING_ENROLMENT'
+      `;
+
+      await writeAuditEvent(tx, {
+        organizationId: user.organization_id,
+        actorId: user.id,
+        actorLevel: user.authority_level,
+        eventClass: 'IDENTITY',
+        action: 'auth.webauthn.enrolled_with_token',
+        objectType: 'WebAuthnCredential',
+        objectId: info.credential.id,
+        outcome: 'SUCCESS',
+        correlationId,
+        securityContext: c.get('securityContext'),
+        detail: {
+          friendlyName: body.friendlyName,
+          deviceType: info.credentialDeviceType,
+          backedUp: info.credentialBackedUp,
+          viaEnrolmentToken: true,
+        },
+      });
+    });
+
+    return { registered: true, credentialId: info.credential.id };
+  });
+
+  return c.json(result, 201);
+});
