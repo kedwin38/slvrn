@@ -187,7 +187,15 @@ export class DarajaClient {
       await this.getAccessToken(true);
       return {
         ok: true,
-        message: `Authenticated against the Daraja ${this.options.environment} environment successfully.`,
+        /*
+         * Deliberately narrow wording. This exchanges the consumer key and secret for a
+         * token and proves nothing else: not the initiator name, not the SecurityCredential,
+         * not the shortcode, and not whether the API user holds the ORG B2C API Initiator
+         * role. Those are only exercised by a real payment. Reporting this as "connected"
+         * would let an administrator enable a configuration that fails on every single
+         * disbursement with 2001 or 21, which is exactly the trap this message avoids.
+         */
+        message: `Consumer key and secret accepted by the Daraja ${this.options.environment} environment. This proves the app credentials only — the initiator name, security credential, shortcode and B2C role are first exercised by a real payment.`,
         latencyMs: this.now() - started,
       };
     } catch (err) {

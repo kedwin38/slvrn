@@ -178,6 +178,8 @@ export interface DarajaConfigurationView {
   securityCredentialMasked: string;
   credentialVersion: number;
   credentialRotatedAt: string | null;
+  /** Days since the last rotation. Safaricom expires the portal password after 90. */
+  credentialAgeDays: number | null;
   resultUrl: string | null;
   queueTimeoutUrl: string | null;
   status: string;

@@ -704,8 +704,10 @@ dashboardRoutes.get('/action-queue', async (c) => {
     if (hasPermission(capabilities, 'admin:daraja')) {
       // A batch released against expired credentials fails at the provider, one instruction
       // at a time, after the ceremony is spent.
-      const config = await sql<{ environment: string; status: string }[]>`
-        SELECT environment, status FROM daraja_configurations
+      const config = await sql<
+        { environment: string; status: string; credential_rotated_at: string | null }[]
+      >`
+        SELECT environment, status, credential_rotated_at FROM daraja_configurations
          WHERE organization_id = ${actor.organizationId}
       `;
       if (config.length === 0) {
@@ -719,6 +721,29 @@ dashboardRoutes.get('/action-queue', async (c) => {
           oldestAt: null,
         });
       } else {
+        /*
+         * Safaricom expires an API user's portal password after 90 days, and an expired one
+         * fails every payment with 2001. Counted here so the warning lands before a payroll
+         * run rather than during one.
+         */
+        const stale = config.filter(
+          (row) =>
+            row.credential_rotated_at !== null &&
+            Date.now() - new Date(row.credential_rotated_at).getTime() > 75 * 86_400_000,
+        );
+        if (stale.length > 0) {
+          queue.push({
+            kind: 'DARAJA_CREDENTIAL_AGEING',
+            severity: 'warning',
+            title: 'The M-PESA initiator credential is approaching Safaricom’s 90-day expiry',
+            detail:
+              'Rotate it on the org portal and here. An expired credential fails every payment with ResultCode 2001.',
+            count: stale.length,
+            route: 'daraja',
+            oldestAt: iso(stale[0]!.credential_rotated_at),
+          });
+        }
+
         const unhealthy = config.filter((row) => row.status !== 'ACTIVE');
         if (unhealthy.length > 0) {
           queue.push({

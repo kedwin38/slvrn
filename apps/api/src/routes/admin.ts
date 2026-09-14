@@ -35,6 +35,7 @@ import {
   type DarajaConfigRow,
 } from '../services/daraja-config.js';
 import { encryptSecret, hashPassword, sha256Hex } from '../services/crypto.js';
+import { isPrecomputedCredential } from '@solvaren/daraja';
 import { assertFreshAuthentication, assertWebAuthnSession } from '../services/auth.js';
 import { createSecretStore, secretReference } from '../services/daraja-config.js';
 import type { AppContext, BackupQueueMessage } from '../env.js';
@@ -55,7 +56,39 @@ const darajaConfigSchema = z.object({
     .default('BusinessPayment'),
   consumerKey: z.string().trim().min(10).max(200),
   consumerSecret: z.string().trim().min(10).max(200),
-  initiatorPasswordOrCredential: z.string().trim().min(8).max(2000),
+  /*
+   * Either the plain initiator password, or an already-encrypted SecurityCredential from
+   * the Daraja portal.
+   *
+   * When it is a plain password, Safaricom's portal rules apply and are enforced here.
+   * The M-PESA portal restricts special characters to # & % $ and specifically rejects or
+   * mishandles `@` and `.`. A password containing one is accepted by the portal-side form
+   * in some flows and then fails decryption on every single payment with ResultCode 2001
+   * — an error that reads like a certificate problem and costs a payroll run to diagnose.
+   * Refusing it at the point of entry is the only cheap moment to catch it.
+   */
+  initiatorPasswordOrCredential: z
+    .string()
+    .trim()
+    .min(8)
+    .max(2000)
+    .superRefine((value, ctx) => {
+      if (isPrecomputedCredential(value)) return;
+      if (/[@.]/.test(value)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            'The M-PESA portal does not accept "@" or "." in an initiator password. Every payment would fail with ResultCode 2001. Change it on the org portal and enter the new one.',
+        });
+      }
+      if (/[^A-Za-z0-9#&%$]/.test(value)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            'M-PESA restricts initiator passwords to letters, digits and the symbols # & % $.',
+        });
+      }
+    }),
   mpesaCertificatePem: z.string().trim().max(10_000).optional(),
 });
 

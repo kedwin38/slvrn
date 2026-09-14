@@ -64,6 +64,8 @@ export interface MaskedDarajaConfig {
   securityCredentialMasked: string;
   credentialVersion: number;
   credentialRotatedAt: string | null;
+  /** Days since the last rotation. Safaricom expires the portal password after 90. */
+  credentialAgeDays: number | null;
   resultUrl: string;
   queueTimeoutUrl: string;
   status: DarajaConfigRow['status'];
@@ -88,6 +90,17 @@ export function maskConfig(row: DarajaConfigRow): MaskedDarajaConfig {
     securityCredentialMasked: MASK,
     credentialVersion: row.credential_version,
     credentialRotatedAt: row.credential_rotated_at,
+    /*
+     * Safaricom expires an API user's portal password after 90 days. When it lapses, every
+     * payment fails with 2001 — indistinguishable at a glance from a bad certificate, and
+     * discovered at the worst possible moment because nothing counts the days.
+     *
+     * Reported as an age in days so the console can warn before payroll rather than after.
+     * `null` when the credential has never been rotated, which is itself worth surfacing.
+     */
+    credentialAgeDays: row.credential_rotated_at
+      ? Math.floor((Date.now() - new Date(row.credential_rotated_at).getTime()) / 86_400_000)
+      : null,
     resultUrl: row.result_url,
     queueTimeoutUrl: row.queue_timeout_url,
     status: row.status,

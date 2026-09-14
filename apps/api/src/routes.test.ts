@@ -1791,6 +1791,91 @@ suite('HTTP routes', () => {
       });
     }
 
+    /*
+     * Safaricom's portal restricts an initiator password to letters, digits and # & % $,
+     * and specifically will not round-trip `@` or `.`. A password containing one encrypts
+     * fine here and then fails decryption at M-PESA on every single payment with 2001 —
+     * an error that reads like a certificate problem. The only cheap moment to catch it is
+     * the moment it is typed.
+     */
+    it('refuses an initiator password containing @ or .', async () => {
+      for (const password of ['pa55word@mpesa', 'my.password1', 'a@b.c12345']) {
+        const response = await call('/admin/daraja', {
+          level: 'L3',
+          method: 'POST',
+          body: {
+            environment: 'sandbox',
+            shortCode: '600992',
+            initiatorName: 'testapi',
+            consumerKey: 'consumer-key-value',
+            consumerSecret: 'consumer-secret-value',
+            initiatorPasswordOrCredential: password,
+          },
+        });
+        expect(response.status, password).toBe(422);
+      }
+    });
+
+    it('refuses symbols M-PESA does not accept in an initiator password', async () => {
+      const response = await call('/admin/daraja', {
+        level: 'L3',
+        method: 'POST',
+        body: {
+          environment: 'sandbox',
+          shortCode: '600992',
+          initiatorName: 'testapi',
+          consumerKey: 'consumer-key-value',
+          consumerSecret: 'consumer-secret-value',
+          initiatorPasswordOrCredential: 'pass(word)1',
+        },
+      });
+      expect(response.status).toBe(422);
+    });
+
+    it('accepts the symbols M-PESA does allow', async () => {
+      const response = await call('/admin/daraja', {
+        level: 'L3',
+        method: 'POST',
+        body: {
+          environment: 'sandbox',
+          shortCode: '600992',
+          initiatorName: 'testapi',
+          consumerKey: 'consumer-key-value',
+          consumerSecret: 'consumer-secret-value',
+          initiatorPasswordOrCredential: 'Safaricom#2026&pay%ok$',
+        },
+      });
+      // It is refused for want of a certificate, not for the password. Asserting on the
+      // code rather than the status matters: both refusals are 422, and a test that only
+      // checked the status would pass while the password rule silently rejected a legal
+      // password.
+      const body = (await response.json()) as { error: { code: string } };
+      expect(body.error.code).toBe('DARAJA_CERTIFICATE_REQUIRED');
+    });
+
+    it('lets a pre-computed SecurityCredential through untouched', async () => {
+      // A portal-generated credential is base64 and legitimately contains + / = — the
+      // password rules must not be applied to it.
+      const credential = `${'RC6E9WDxXR4b9X2c6z3gp0oC5Th'.repeat(6)}+/==`;
+      const response = await call('/admin/daraja', {
+        level: 'L3',
+        method: 'POST',
+        body: {
+          environment: 'sandbox',
+          shortCode: '600992',
+          initiatorName: 'testapi',
+          consumerKey: 'consumer-key-value',
+          consumerSecret: 'consumer-secret-value',
+          initiatorPasswordOrCredential: credential,
+        },
+      });
+      // Accepted as a credential and taken past validation — no certificate is needed for
+      // one that is already encrypted.
+      const body = (await response.json()) as { error?: { code: string } };
+      expect(body.error?.code).not.toBe('DARAJA_CERTIFICATE_REQUIRED');
+      expect(response.status).not.toBe(422);
+    });
+
     it('refuses an unauthenticated caller outright', async () => {
       expect((await call('/admin/daraja')).status).toBe(401);
     });

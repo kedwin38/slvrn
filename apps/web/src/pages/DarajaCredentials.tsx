@@ -155,6 +155,24 @@ export function DarajaCredentialsPage() {
                       <td>
                         <code className="small">{config.consumerKeyMasked}</code>
                         <div className="small muted">version {config.credentialVersion}</div>
+                        {/*
+                          Safaricom expires the API user's portal password after 90 days.
+                          When it lapses every payment fails with 2001, which reads like a
+                          certificate fault — so the age is counted here rather than
+                          discovered on a payroll morning.
+                        */}
+                        {config.credentialAgeDays !== null && config.credentialAgeDays >= 75 && (
+                          <div className="small">
+                            <span
+                              className="chip"
+                              data-tone={config.credentialAgeDays >= 90 ? 'danger' : 'warning'}
+                            >
+                              {config.credentialAgeDays >= 90
+                                ? `credential ${config.credentialAgeDays} days old — past Safaricom's 90-day expiry`
+                                : `rotate soon — ${90 - config.credentialAgeDays} days left`}
+                            </span>
+                          </div>
+                        )}
                       </td>
                       <td>
                         {untested ? (
@@ -366,7 +384,7 @@ export function DarajaCredentialsPage() {
 
             <Field
               label="Initiator password or security credential"
-              hint="The plain initiator password, or an already-encrypted SecurityCredential"
+              hint="The API user's portal password (letters, digits and # & % $ only — never @ or .), or an already-encrypted SecurityCredential"
             >
               {(props) => (
                 <input
@@ -384,8 +402,8 @@ export function DarajaCredentialsPage() {
             </Field>
 
             <Field
-              label="M-PESA certificate (optional)"
-              hint="PEM public certificate, if the initiator password must be encrypted here"
+              label="M-PESA public certificate"
+              hint="Required when you entered a plain initiator password above — it is what encrypts it. Not needed if you pasted a SecurityCredential already generated on the Daraja portal."
             >
               {(props) => (
                 <textarea
