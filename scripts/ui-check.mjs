@@ -474,6 +474,44 @@ for (const theme of ['light', 'dark']) {
   await page.goto('http://localhost:4173/', { waitUntil: 'networkidle' });
   await shot(page, `01-login-${theme}`);
 
+  /*
+   * Credential recovery must be reachable from the sign-in screen itself — a person who
+   * cannot sign in cannot navigate to it from anywhere else. §11 also forbids the usual
+   * escape hatches, so the screen must offer a recovery CODE and must not offer to email
+   * or text anything.
+   */
+  await page.click('text=Use a recovery code');
+  await page.waitForSelector('text=Recovery code', { timeout: 5000 });
+  const recoveryHtml = (await page.content()).toLowerCase();
+  /*
+   * Phrases that can only be an OFFER of a forbidden channel. A bare "sms" would match the
+   * screen's own promise that it never uses one, which is the opposite of a defect — the
+   * first version of this check failed on exactly that.
+   */
+  const offers = [
+    'send you a code',
+    'send a code to',
+    "we'll text",
+    'we will text',
+    'check your email',
+    'email you a link',
+    'reset link',
+  ];
+  const offending = offers.filter((phrase) => recoveryHtml.includes(phrase));
+  // And it should say so positively, so nobody goes looking for an email that never comes.
+  if (!recoveryHtml.includes('never sends a reset by sms or email')) {
+    errors.push(`[${theme}] the recovery screen does not state that SMS and email are never used`);
+  }
+  if (offending.length > 0) {
+    errors.push(
+      `[${theme}] the recovery screen offers a forbidden channel: ${offending.join(', ')}`,
+    );
+  }
+  console.log(`  recovery reachable from sign-in: yes, forbidden offers: ${offending.length}`);
+  await shot(page, `10-recovery-${theme}`);
+  await page.click('text=Back to sign in');
+  await page.waitForSelector('input[type=email]', { timeout: 5000 });
+
   await page.fill('input[type=email]', 'ceo@acme.test');
   await page.fill('input[type=password]', 'correct horse battery staple');
   await page.click('button[type=submit]');

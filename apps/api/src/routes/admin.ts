@@ -1884,3 +1884,162 @@ adminRoutes.post(
     return c.json({ withdrawn: true });
   },
 );
+
+/**
+ * POST /admin/users/:id/reset-access — controlled administrative recovery (spec §11).
+ *
+ * The other half of recovery: an executive vouching for somebody who cannot get back in on
+ * their own. Before this, an administrator could change a member's *level* and *status* and
+ * nothing else — so an employee who forgot their password was locked out for good, and the
+ * only remedy was editing the database by hand.
+ *
+ * It is the most dangerous operation an administrator has, because it mints a credential
+ * for an account that is not theirs. The controls follow from that:
+ *
+ *   - Fresh authentication and a WebAuthn session, the same bar as changing Daraja
+ *     credentials. A borrowed unlocked laptop must not be able to do this.
+ *   - Never on yourself. An executive who has lost their own password uses a recovery code;
+ *     allowing self-reset would let anyone holding a live L3 session quietly re-key the
+ *     account they are sitting in, which is how a session compromise becomes permanent.
+ *   - Every session of the target dies immediately, and the passphrase is shown once.
+ *   - Recovering an L3 raises a CRITICAL security event. §11 asks for Level 3 recovery to
+ *     be "particularly restrictive and fully audited"; one executive re-keying another is
+ *     precisely the move a hostile insider would make, so it is loud.
+ *
+ * Optionally revokes the member's authenticators too, for the "lost the laptop and the
+ * key" case. That forces re-enrolment, which is why it also parks the account as
+ * PENDING_ENROLMENT rather than leaving it ACTIVE and unusable.
+ */
+adminRoutes.post(
+  '/users/:id/reset-access',
+  requireExactLevel('L3'),
+  requirePermissions('admin:users'),
+  async (c) => {
+    const actor = actorOf(c);
+    assertFreshAuthentication(actor);
+    assertWebAuthnSession(actor);
+
+    const userId = c.req.param('id');
+    const correlationId = c.get('correlationId');
+    const body = z
+      .object({
+        reason: z.string().trim().min(10).max(500),
+        revokeAuthenticators: z.boolean().default(false),
+      })
+      .parse(await c.req.json());
+
+    if (userId === actor.userId) {
+      throw validationError(
+        'CANNOT_RESET_SELF',
+        'You cannot reset your own access. Use a recovery code, or ask another executive to recover the account.',
+      );
+    }
+
+    const passphrase = generatePassphrase();
+
+    const result = await withConnection(c.env, (sql) =>
+      inTransaction(sql, async (tx) => {
+        const rows = await tx<
+          {
+            id: string;
+            email: string;
+            full_name: string;
+            authority_level: string;
+            status: string;
+          }[]
+        >`
+          SELECT id, email, full_name, authority_level, status FROM users
+           WHERE id = ${userId} AND organization_id = ${actor.organizationId}
+           FOR UPDATE
+        `;
+        const target = rows[0];
+        if (!target) throw notFoundError('USER_NOT_FOUND', 'That member could not be found');
+
+        const revokeKeys = body.revokeAuthenticators;
+        if (revokeKeys) {
+          await tx`DELETE FROM webauthn_credentials WHERE user_id = ${userId}`;
+        }
+
+        const hasAuthenticator = revokeKeys
+          ? false
+          : (
+              await tx<{ count: string }[]>`
+                SELECT count(*)::text AS count FROM webauthn_credentials WHERE user_id = ${userId}
+              `
+            )[0]!.count !== '0';
+
+        /*
+         * An L2 or L3 without an authenticator cannot sign in, so marking it ACTIVE would
+         * be a lie the database itself half-catches (users_privileged_requires_pin) and the
+         * login path fully catches. PENDING_ENROLMENT is the honest state.
+         */
+        const status =
+          target.authority_level !== 'L1' && !hasAuthenticator ? 'PENDING_ENROLMENT' : 'ACTIVE';
+
+        await tx`
+          UPDATE users
+             SET password_hash = ${await hashPassword(passphrase)},
+                 password_updated_at = now(),
+                 failed_login_count = 0,
+                 locked_until = NULL,
+                 status = ${status}
+           WHERE id = ${userId}
+        `;
+
+        // Any recovery ticket already outstanding for this member is spent: the
+        // administrator's action supersedes it, and two live routes in is one too many.
+        await tx`
+          UPDATE recovery_tickets SET consumed_at = now()
+           WHERE user_id = ${userId} AND consumed_at IS NULL
+        `;
+        await tx`
+          UPDATE sessions SET revoked_at = now(), revocation_reason = 'ACCESS_RESET_BY_ADMINISTRATOR'
+           WHERE user_id = ${userId} AND revoked_at IS NULL
+        `;
+
+        await tx`
+          INSERT INTO security_events (organization_id, user_id, event_type, severity, description, ip, detail)
+          VALUES (
+            ${actor.organizationId}, ${userId}, 'ACCESS_RESET_BY_ADMINISTRATOR',
+            ${target.authority_level === 'L3' ? 'CRITICAL' : 'WARNING'},
+            ${`Access was reset for ${target.full_name} by an executive`},
+            ${c.get('securityContext').ip},
+            ${tx.json({
+              resetBy: actor.userId,
+              targetLevel: target.authority_level,
+              authenticatorsRevoked: revokeKeys,
+              reason: body.reason,
+            })}
+          )
+        `;
+        await writeAuditEvent(tx, {
+          organizationId: actor.organizationId,
+          actorId: actor.userId,
+          actorLevel: actor.level,
+          eventClass: 'IDENTITY',
+          action: 'user.access_reset',
+          objectType: 'User',
+          objectId: userId,
+          outcome: 'SUCCESS',
+          previousState: { status: target.status },
+          newState: { status, authenticatorsRevoked: revokeKeys },
+          correlationId,
+          securityContext: c.get('securityContext'),
+          detail: { reason: body.reason, targetEmail: target.email },
+        });
+
+        return { email: target.email, status, authenticatorsRevoked: revokeKeys };
+      }),
+    );
+
+    return c.json({
+      email: result.email,
+      status: result.status,
+      oneTimePassword: passphrase,
+      authenticatorsRevoked: result.authenticatorsRevoked,
+      note: result.authenticatorsRevoked
+        ? 'Read this to them in person or over a channel you trust — it is shown once. They will also need a new enrolment token before they can sign in.'
+        : 'Read this to them in person or over a channel you trust — it is shown once. Every session on the account has been signed out.',
+    });
+  },
+);

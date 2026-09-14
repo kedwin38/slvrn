@@ -184,6 +184,38 @@ export function UsersPage() {
                       </td>
                       <td>
                         <div style={{ display: 'flex', gap: 'var(--s2)', flexWrap: 'wrap' }}>
+                          {/*
+                            Controlled administrative recovery (§11). Before this the only
+                            remedy for a forgotten password was editing the database by
+                            hand, so an employee who forgot theirs was locked out for good.
+                          */}
+                          <button
+                            className="button"
+                            data-variant="ghost"
+                            disabled={busy}
+                            onClick={() => {
+                              const why = window.prompt(
+                                `Why are you resetting access for ${user.fullName}? (recorded in the audit trail)`,
+                              );
+                              if (!why || why.trim().length < 10) return;
+                              const alsoKeys = window.confirm(
+                                'Also remove their security keys? Choose OK only if the key itself is lost — they will need a new enrolment token before they can sign in.',
+                              );
+                              void act(
+                                () =>
+                                  api.admin.users.resetAccess(user.userId, why.trim(), alsoKeys),
+                                (result) =>
+                                  setHandover({
+                                    title: `One-time password for ${result.email}`,
+                                    label: 'Password',
+                                    value: result.oneTimePassword,
+                                  }),
+                              );
+                            }}
+                          >
+                            Reset access
+                          </button>
+
                           {!user.hasAuthenticator && (
                             <button
                               className="button"

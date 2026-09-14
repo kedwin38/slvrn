@@ -38,6 +38,7 @@ import {
   hashAuthorizationPin,
   assertPinShape,
   verifyPassword,
+  hashPassword,
   generateRecoveryCode,
   hashSessionToken,
   sha256Hex,
@@ -921,4 +922,267 @@ authRoutes.post('/enrolment/complete', async (c) => {
   });
 
   return c.json(result, 201);
+});
+
+// ---------------------------------------------------------------------------
+// Credential recovery (spec §11 — NO WEAK RECOVERY PATH)
+// ---------------------------------------------------------------------------
+
+/**
+ * Recovery, done the way §11 demands and no other way.
+ *
+ * The specification is explicit about what must never exist: no SMS reset, no email OTP,
+ * no "forgot password" link that mails a new one. Those are backdoors around the entire
+ * security architecture. What it requires instead is recovery through an existing recovery
+ * credential OR controlled administrative recovery, under elevated review.
+ *
+ * Both routes end here, and both are narrow:
+ *
+ *   - A recovery code proves you are you. It buys exactly one thing: the right to set a new
+ *     password. It does NOT sign you in, and it does NOT restore a lost security key — an
+ *     L2 or L3 who has lost their authenticator still needs an administrator to issue an
+ *     enrolment token, because a single code must never reconstitute payment authority on
+ *     its own.
+ *   - Administrative recovery (in admin.ts) is an executive vouching for somebody, and is
+ *     recorded as such.
+ *
+ * Setting the new password revokes every session the account had. If the reason for
+ * recovery was that somebody else had the old password, leaving their session alive would
+ * defeat the whole exercise.
+ */
+
+const RECOVERY_TICKET_MINUTES = 15;
+
+/** One refusal for every failure, so the endpoint cannot be used to enumerate accounts. */
+const RECOVERY_REFUSED = 'That email address and recovery code combination was not accepted.';
+
+authRoutes.post('/recovery/start', async (c) => {
+  const body = z
+    .object({
+      email: z.string().trim().email().max(320),
+      code: z.string().trim().min(8).max(64),
+    })
+    .parse(await c.req.json());
+  const security = c.get('securityContext');
+  const correlationId = c.get('correlationId');
+
+  const result = await withConnection(c.env, async (sql) => {
+    /*
+     * The code hash is deterministic (HMAC under the session signing key), so this is a
+     * single indexed lookup rather than a scan that verifies candidates one at a time.
+     * That matters for more than speed: a loop whose duration depends on how many codes an
+     * account has is a timing oracle for whether the account exists.
+     */
+    const codeHash = await hashSessionToken(body.code, c.env.SESSION_SIGNING_KEY);
+    const matches = await sql<
+      {
+        id: string;
+        user_id: string;
+        organization_id: string;
+        email: string;
+        authority_level: string;
+        status: string;
+      }[]
+    >`
+      SELECT rc.id, rc.user_id, rc.organization_id, u.email, u.authority_level, u.status
+        FROM recovery_codes rc
+        JOIN users u ON u.id = rc.user_id
+       WHERE rc.code_hash = ${codeHash}
+         AND rc.consumed_at IS NULL
+         AND u.email = ${body.email.trim().toLowerCase()}
+       LIMIT 1
+    `;
+    const match = matches[0];
+
+    if (!match) {
+      // Recorded against the organisation when we can attribute it, and always recorded:
+      // a burst of these is somebody working through a stolen code list.
+      await sql`
+        INSERT INTO security_events (event_type, severity, description, ip, user_agent, detail)
+        VALUES ('RECOVERY_CODE_REJECTED', 'WARNING',
+                ${'A credential recovery attempt presented an unrecognised email and code'},
+                ${security.ip}, ${security.userAgent},
+                ${sql.json({ email: body.email.trim().toLowerCase() })})
+      `;
+      throw authenticationError('RECOVERY_REFUSED', RECOVERY_REFUSED);
+    }
+
+    // A disabled account is not recoverable by its own holder. Somebody disabled it on
+    // purpose, and a recovery code must not undo an administrative decision.
+    if (match.status === 'DISABLED') {
+      await sql`
+        INSERT INTO security_events (organization_id, user_id, event_type, severity, description, ip, detail)
+        VALUES (${match.organization_id}, ${match.user_id}, 'RECOVERY_ON_DISABLED_ACCOUNT', 'CRITICAL',
+                ${'A valid recovery code was presented for a disabled account'},
+                ${security.ip}, ${sql.json({ level: match.authority_level })})
+      `;
+      throw authenticationError('RECOVERY_REFUSED', RECOVERY_REFUSED);
+    }
+
+    const ticket = randomToken(32);
+    await inTransaction(sql, async (tx) => {
+      await tx`
+        UPDATE recovery_codes SET consumed_at = now(), consumed_ip = ${security.ip}
+         WHERE id = ${match.id}
+      `;
+      // Any earlier unspent ticket for this user is spent first, so the one-live-ticket
+      // index never refuses a legitimate second attempt after an abandoned one.
+      await tx`
+        UPDATE recovery_tickets SET consumed_at = now()
+         WHERE user_id = ${match.user_id} AND consumed_at IS NULL
+      `;
+      await tx`
+        INSERT INTO recovery_tickets (
+          organization_id, user_id, ticket_hash, origin, expires_at, issued_ip
+        ) VALUES (
+          ${match.organization_id}, ${match.user_id},
+          ${await hashSessionToken(ticket, c.env.SESSION_SIGNING_KEY)}, 'RECOVERY_CODE',
+          now() + interval '${sql.unsafe(String(RECOVERY_TICKET_MINUTES))} minutes', ${security.ip}
+        )
+      `;
+      await tx`
+        INSERT INTO security_events (organization_id, user_id, event_type, severity, description, ip, user_agent, detail)
+        VALUES (${match.organization_id}, ${match.user_id}, 'RECOVERY_CODE_REDEEMED',
+                ${match.authority_level === 'L3' ? 'CRITICAL' : 'WARNING'},
+                ${'A recovery code was redeemed to reset a password'},
+                ${security.ip}, ${security.userAgent},
+                ${tx.json({ level: match.authority_level })})
+      `;
+      await writeAuditEvent(tx, {
+        organizationId: match.organization_id,
+        actorId: match.user_id,
+        actorLevel: match.authority_level,
+        eventClass: 'IDENTITY',
+        action: 'auth.recovery.code_redeemed',
+        objectType: 'User',
+        objectId: match.user_id,
+        outcome: 'SUCCESS',
+        correlationId,
+        securityContext: security,
+      });
+    });
+
+    const remaining = await sql<{ count: string }[]>`
+      SELECT count(*)::text AS count FROM recovery_codes
+       WHERE user_id = ${match.user_id} AND consumed_at IS NULL
+    `;
+
+    return {
+      ticket,
+      expiresInMinutes: RECOVERY_TICKET_MINUTES,
+      remainingCodes: Number(remaining[0]?.count ?? '0'),
+      level: match.authority_level,
+    };
+  });
+
+  return c.json({
+    ...result,
+    note:
+      result.level === 'L1'
+        ? 'Set a new password to finish. Every session on this account will be signed out.'
+        : 'Set a new password to finish. Your security key is still required to sign in — if you have lost that too, an administrator must issue an enrolment token.',
+  });
+});
+
+const completeSchema = z.object({
+  ticket: z.string().trim().min(16).max(128),
+  newPassword: z
+    .string()
+    .min(12, 'Use at least 12 characters')
+    .max(1024)
+    .refine((value) => value.trim().length >= 12, 'Use at least 12 characters'),
+});
+
+authRoutes.post('/recovery/complete', async (c) => {
+  const body = completeSchema.parse(await c.req.json());
+  const security = c.get('securityContext');
+  const correlationId = c.get('correlationId');
+
+  await withConnection(c.env, (sql) =>
+    inTransaction(sql, async (tx) => {
+      const tickets = await tx<
+        {
+          id: string;
+          user_id: string;
+          organization_id: string;
+          origin: string;
+          authority_level: string;
+          password_hash: string;
+        }[]
+      >`
+        SELECT rt.id, rt.user_id, rt.organization_id, rt.origin,
+               u.authority_level, u.password_hash
+          FROM recovery_tickets rt
+          JOIN users u ON u.id = rt.user_id
+         WHERE rt.ticket_hash = ${await hashSessionToken(body.ticket, c.env.SESSION_SIGNING_KEY)}
+           AND rt.consumed_at IS NULL
+           AND rt.expires_at > now()
+         FOR UPDATE OF rt
+      `;
+      const ticket = tickets[0];
+      if (!ticket) {
+        throw authenticationError(
+          'RECOVERY_TICKET_INVALID',
+          'That recovery link has expired or has already been used. Start again with another recovery code.',
+        );
+      }
+
+      // Reusing the old password would leave the account exactly as compromised as the
+      // event that prompted recovery.
+      if (await verifyPassword(body.newPassword, ticket.password_hash)) {
+        throw validationError(
+          'PASSWORD_UNCHANGED',
+          'Choose a password you have not used on this account before.',
+        );
+      }
+
+      await tx`
+        UPDATE users
+           SET password_hash = ${await hashPassword(body.newPassword)},
+               password_updated_at = now(),
+               failed_login_count = 0,
+               locked_until = NULL
+         WHERE id = ${ticket.user_id}
+      `;
+      await tx`UPDATE recovery_tickets SET consumed_at = now() WHERE id = ${ticket.id}`;
+
+      /*
+       * Every session, without exception. If recovery was prompted by somebody else having
+       * had the password, a surviving session is the attacker's way back in — and the new
+       * password would give the legitimate owner false confidence that it was closed.
+       */
+      await tx`
+        UPDATE sessions SET revoked_at = now(), revocation_reason = 'CREDENTIAL_RECOVERED'
+         WHERE user_id = ${ticket.user_id} AND revoked_at IS NULL
+      `;
+
+      await tx`
+        INSERT INTO security_events (organization_id, user_id, event_type, severity, description, ip, user_agent, detail)
+        VALUES (${ticket.organization_id}, ${ticket.user_id}, 'PASSWORD_RECOVERED',
+                ${ticket.authority_level === 'L3' ? 'CRITICAL' : 'WARNING'},
+                ${'A password was reset through credential recovery'},
+                ${security.ip}, ${security.userAgent},
+                ${tx.json({ origin: ticket.origin, level: ticket.authority_level })})
+      `;
+      await writeAuditEvent(tx, {
+        organizationId: ticket.organization_id,
+        actorId: ticket.user_id,
+        actorLevel: ticket.authority_level,
+        eventClass: 'IDENTITY',
+        action: 'auth.recovery.completed',
+        objectType: 'User',
+        objectId: ticket.user_id,
+        outcome: 'SUCCESS',
+        correlationId,
+        securityContext: security,
+        detail: { origin: ticket.origin },
+      });
+    }),
+  );
+
+  return c.json({
+    recovered: true,
+    message:
+      'Your password has been changed and every session on this account has been signed out. Sign in with the new password.',
+  });
 });

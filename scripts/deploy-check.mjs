@@ -219,6 +219,9 @@ async function main() {
         // resume it, and no Level 2 decision anywhere in the console.
         ['Submit to Finance Control', 'draft resumption'],
         ['Approve for release', 'the Level 2 review stage'],
+        // §11 recovery: the codes were write-only and there was no reset at all.
+        ['Use a recovery code', 'credential recovery'],
+        ['Reset access', 'administrative recovery'],
       ]) {
         record(all.includes(needle), `the console ships the ${label} screen`, needle);
       }

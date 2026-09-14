@@ -20,7 +20,9 @@ export function Login({
 }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [stage, setStage] = useState<'credentials' | 'webauthn' | 'enrol'>('credentials');
+  const [stage, setStage] = useState<'credentials' | 'webauthn' | 'enrol' | 'recover'>(
+    'credentials',
+  );
   const [enrolmentToken, setEnrolmentToken] = useState('');
   const [enrolled, setEnrolled] = useState(false);
   const [ticket, setTicket] = useState<string | null>(null);
@@ -192,7 +194,21 @@ export function Login({
               >
                 Enrol a security key
               </button>
+
+              <button
+                className="button"
+                data-variant="ghost"
+                type="button"
+                onClick={() => {
+                  setStage('recover');
+                  setError(null);
+                }}
+              >
+                Use a recovery code
+              </button>
             </form>
+          ) : stage === 'recover' ? (
+            <Recover onDone={() => setStage('credentials')} />
           ) : stage === 'enrol' ? (
             <form onSubmit={submitEnrolment} className="stack">
               <Notice tone="info">
@@ -416,4 +432,179 @@ function encodeBase64Url(buffer: ArrayBuffer): string {
   let text = '';
   for (const byte of bytes) text += String.fromCharCode(byte);
   return btoa(text).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+/**
+ * Credential recovery, the only way back in that the specification permits.
+ *
+ * §11 is emphatic about what must not exist here: no SMS reset, no emailed OTP, no link
+ * that mails a new password. Those are backdoors around everything else the platform does.
+ * What is offered instead is a code the user already holds, proving they are who they say
+ * before they are allowed to choose a new password.
+ *
+ * Two things this screen is careful to say plainly. Recovery signs out every session on the
+ * account, which is the point when the reason for recovering is that somebody else had the
+ * password. And for an L2 or L3 it does NOT restore a lost security key — a code alone must
+ * never reconstitute payment authority, so an administrator still has to issue an enrolment
+ * token. Saying so here saves somebody discovering it at the sign-in screen afterwards.
+ */
+function Recover({ onDone }: { onDone: () => void }) {
+  const [email, setEmail] = useState('');
+  const [code, setCode] = useState('');
+  const [ticket, setTicket] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+  const [remaining, setRemaining] = useState<number | null>(null);
+  const [newPassword, setNewPassword] = useState('');
+  const [confirm, setConfirm] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [done, setDone] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  async function run(operation: () => Promise<void>) {
+    setBusy(true);
+    setError(null);
+    try {
+      await operation();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'That did not work.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (done) {
+    return (
+      <div className="stack">
+        <Notice tone="success" live="polite">
+          Your password has been changed and every session on this account has been signed out. Sign
+          in with the new password.
+        </Notice>
+        <button className="button" data-variant="primary" onClick={onDone}>
+          Back to sign in
+        </button>
+      </div>
+    );
+  }
+
+  if (ticket) {
+    return (
+      <form
+        className="stack"
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (newPassword !== confirm) {
+            setError('The two passwords do not match.');
+            return;
+          }
+          void run(async () => {
+            await api.recovery.complete(ticket, newPassword);
+            setDone(true);
+          });
+        }}
+      >
+        <Notice tone="info">{note}</Notice>
+        {remaining !== null && (
+          <p className="small muted">
+            {remaining} recovery code{remaining === 1 ? '' : 's'} left. Generate a fresh set from
+            Security once you are back in.
+          </p>
+        )}
+        {error && (
+          <Notice tone="danger" live="assertive">
+            {error}
+          </Notice>
+        )}
+
+        <Field label="New password" hint="At least 12 characters.">
+          {(props) => (
+            <input
+              {...props}
+              className="input"
+              type="password"
+              autoComplete="new-password"
+              required
+              minLength={12}
+              value={newPassword}
+              onChange={(event) => setNewPassword(event.target.value)}
+            />
+          )}
+        </Field>
+        <Field label="Confirm new password">
+          {(props) => (
+            <input
+              {...props}
+              className="input"
+              type="password"
+              autoComplete="new-password"
+              required
+              value={confirm}
+              onChange={(event) => setConfirm(event.target.value)}
+            />
+          )}
+        </Field>
+
+        <button className="button" data-variant="primary" type="submit" disabled={busy}>
+          {busy ? 'Setting…' : 'Set the new password'}
+        </button>
+      </form>
+    );
+  }
+
+  return (
+    <form
+      className="stack"
+      onSubmit={(event) => {
+        event.preventDefault();
+        void run(async () => {
+          const result = await api.recovery.start(email.trim(), code.trim());
+          setTicket(result.ticket);
+          setNote(result.note);
+          setRemaining(result.remainingCodes);
+        });
+      }}
+    >
+      <Notice tone="info">
+        Use one of the recovery codes you were given. SOLVAREN never sends a reset by SMS or email —
+        if you have no codes left, an administrator must recover the account for you.
+      </Notice>
+      {error && (
+        <Notice tone="danger" live="assertive">
+          {error}
+        </Notice>
+      )}
+
+      <Field label="Email">
+        {(props) => (
+          <input
+            {...props}
+            className="input"
+            type="email"
+            autoComplete="username"
+            required
+            value={email}
+            onChange={(event) => setEmail(event.target.value)}
+          />
+        )}
+      </Field>
+      <Field label="Recovery code">
+        {(props) => (
+          <input
+            {...props}
+            className="input"
+            autoComplete="one-time-code"
+            required
+            value={code}
+            onChange={(event) => setCode(event.target.value)}
+          />
+        )}
+      </Field>
+
+      <button className="button" data-variant="primary" type="submit" disabled={busy}>
+        {busy ? 'Checking…' : 'Continue'}
+      </button>
+      <button className="button" data-variant="ghost" type="button" onClick={onDone}>
+        Back to sign in
+      </button>
+    </form>
+  );
 }

@@ -603,6 +603,73 @@ SELECT assert_refused($$
             '00000000-0000-0000-0000-0000000000f1', 'SUBMITTED')
 $$, 'a third claim is refused while the retry itself is outstanding');
 
+-- ---------------------------------------------------------------------------
+-- §11 — a recovery ticket is one proof of identity, spent once
+--
+-- A ticket authorises exactly one act: setting a new password. If a spent one could be
+-- un-spent, or re-pointed at another user, a single recovery code would become a permanent
+-- key to an account — which is the backdoor §11 exists to forbid.
+-- ---------------------------------------------------------------------------
+DO $$
+DECLARE org_id uuid; user_id uuid;
+BEGIN
+    INSERT INTO organizations (name, slug) VALUES ('Recovery Test', 'recovery-test')
+    RETURNING id INTO org_id;
+
+    INSERT INTO users (organization_id, email, full_name, authority_level, password_hash)
+    VALUES (org_id, 'recover@test.invalid', 'Recovery Test', 'L1', 'x')
+    RETURNING id INTO user_id;
+
+    INSERT INTO recovery_tickets (id, organization_id, user_id, ticket_hash, origin, expires_at)
+    VALUES ('00000000-0000-0000-0000-0000000e2001'::uuid, org_id, user_id,
+            'ticket-hash-one', 'RECOVERY_CODE', now() + interval '15 minutes');
+
+    UPDATE recovery_tickets SET consumed_at = now()
+     WHERE id = '00000000-0000-0000-0000-0000000e2001'::uuid;
+
+    RAISE NOTICE 'PASS  a recovery ticket can be issued and spent once';
+END $$;
+
+SELECT assert_refused($$
+    UPDATE recovery_tickets SET consumed_at = NULL
+     WHERE id = '00000000-0000-0000-0000-0000000e2001'::uuid
+$$, 'a spent recovery ticket cannot be marked unused again');
+
+SELECT assert_refused($$
+    INSERT INTO recovery_tickets (organization_id, user_id, ticket_hash, origin, expires_at)
+    SELECT organization_id, user_id, 'ticket-hash-two', 'RECOVERY_CODE', now() - interval '1 minute'
+      FROM recovery_tickets WHERE id = '00000000-0000-0000-0000-0000000e2001'::uuid
+$$, 'a recovery ticket cannot expire before it was issued');
+
+SELECT assert_refused($$
+    INSERT INTO recovery_tickets (organization_id, user_id, ticket_hash, origin, expires_at)
+    SELECT organization_id, user_id, 'ticket-hash-three', 'ADMINISTRATIVE', now() + interval '15 minutes'
+      FROM recovery_tickets WHERE id = '00000000-0000-0000-0000-0000000e2001'::uuid
+$$, 'an administrative recovery ticket must name the executive who vouched');
+
+DO $$
+DECLARE org_id uuid; user_id uuid;
+BEGIN
+    SELECT rt.organization_id, rt.user_id INTO org_id, user_id
+      FROM recovery_tickets rt WHERE rt.id = '00000000-0000-0000-0000-0000000e2001'::uuid;
+
+    INSERT INTO recovery_tickets (id, organization_id, user_id, ticket_hash, origin, expires_at)
+    VALUES ('00000000-0000-0000-0000-0000000e2002'::uuid, org_id, user_id,
+            'ticket-hash-live', 'RECOVERY_CODE', now() + interval '15 minutes');
+    RAISE NOTICE 'PASS  a new ticket may be issued once the previous one is spent';
+END $$;
+
+SELECT assert_refused($$
+    INSERT INTO recovery_tickets (organization_id, user_id, ticket_hash, origin, expires_at)
+    SELECT organization_id, user_id, 'ticket-hash-second-live', 'RECOVERY_CODE', now() + interval '15 minutes'
+      FROM recovery_tickets WHERE id = '00000000-0000-0000-0000-0000000e2002'::uuid
+$$, 'two recovery tickets cannot be live for one user at once');
+
+SELECT assert_refused($$
+    UPDATE recovery_tickets SET ticket_hash = 'swapped-hash'
+     WHERE id = '00000000-0000-0000-0000-0000000e2002'::uuid
+$$, 'a live recovery ticket cannot have its identity rewritten');
+
 \echo ''
 \echo '================================================================'
 \echo ' All SOLVAREN database security assertions passed.'

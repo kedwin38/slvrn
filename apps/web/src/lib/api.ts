@@ -909,6 +909,27 @@ export const api = {
    * scripts/create-user.mjs had no PIN and no way to set one, so an L3 could sign in and
    * still never complete a release.
    */
+  /*
+   * Credential recovery (§11). No SMS, no emailed reset link: a recovery code you already
+   * hold, or an executive vouching for you. A ticket authorises one act — setting a new
+   * password — and is never a session.
+   */
+  recovery: {
+    start: (email: string, code: string) =>
+      request<{
+        ticket: string;
+        expiresInMinutes: number;
+        remainingCodes: number;
+        level: string;
+        note: string;
+      }>('/auth/recovery/start', { method: 'POST', body: { email, code } }),
+    complete: (ticket: string, newPassword: string) =>
+      request<{ recovered: boolean; message: string }>('/auth/recovery/complete', {
+        method: 'POST',
+        body: { ticket, newPassword },
+      }),
+  },
+
   account: {
     setAuthorizationPin: (currentPassword: string, pin: string) =>
       request<{ updated: boolean }>('/auth/authorization-pin', {
@@ -1016,6 +1037,17 @@ export const api = {
         request<{ level: string }>(`/admin/users/${id}/level`, {
           method: 'PATCH',
           body: { level },
+        }),
+      resetAccess: (id: string, reason: string, revokeAuthenticators: boolean) =>
+        request<{
+          email: string;
+          status: string;
+          oneTimePassword: string;
+          authenticatorsRevoked: boolean;
+          note: string;
+        }>(`/admin/users/${id}/reset-access`, {
+          method: 'POST',
+          body: { reason, revokeAuthenticators },
         }),
       issueEnrolmentToken: (id: string) =>
         request<{ token: string; expiresAt: string }>(`/admin/users/${id}/enrolment-token`, {

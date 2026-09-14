@@ -1663,6 +1663,344 @@ suite('HTTP routes', () => {
   // nothing could write to. These endpoints are what make that control usable.
   // =========================================================================
 
+  // =========================================================================
+  // Credential recovery (§11)
+  //
+  // Recovery codes were generated and shown to users from the first commit and nothing
+  // could redeem one; there was no password reset for anybody, self-service or
+  // administrative. A user who forgot their password was locked out permanently.
+  // =========================================================================
+
+  describe('credential recovery', () => {
+    /*
+     * Recovery revokes every session on the account it recovers — that is precisely what it
+     * is for. These tests therefore sign the suite's own tokens out as they go, so they are
+     * re-minted here rather than softening the behaviour under test.
+     */
+    async function reissueSessions() {
+      // Administrative recovery also parks a privileged account as PENDING_ENROLMENT when
+      // its keys are revoked, and such an account cannot hold a session at all.
+      await harness.sql`
+        UPDATE users SET status = 'ACTIVE'
+         WHERE organization_id = ${ORG} AND status <> 'ACTIVE'
+      `;
+      for (const level of ['L1', 'L2', 'L3'] as AuthorityLevel[]) {
+        const token = generateSessionToken();
+        await harness.sql`
+          INSERT INTO sessions (organization_id, user_id, token_hash, authenticated_at,
+                                webauthn_verified_at, issued_at, expires_at)
+          VALUES (${ORG}, ${USERS[level]},
+                  ${await hashSessionToken(token, harness.env.SESSION_SIGNING_KEY)},
+                  now(), now(), now(), now() + interval '1 hour')
+        `;
+        tokens[level] = token;
+      }
+    }
+
+    afterAll(reissueSessions);
+
+    /** Mint a code the way the account-security screen does, and return the plaintext. */
+    async function issueCode(userId: string) {
+      const { generateRecoveryCode, hashSessionToken } = await import('./services/crypto.js');
+      const code = generateRecoveryCode();
+      await harness.sql`
+        INSERT INTO recovery_codes (organization_id, user_id, code_hash)
+        VALUES (${ORG}, ${userId},
+                ${await hashSessionToken(code, harness.env.SESSION_SIGNING_KEY)})
+      `;
+      return code;
+    }
+
+    const NEW_PASSWORD = 'recovered-passphrase-2026';
+
+    it('refuses an unknown email and a wrong code identically, so it is not an oracle', async () => {
+      const unknown = await call('/auth/recovery/start', {
+        method: 'POST',
+        body: { email: 'nobody@route.test', code: 'AAAA-BBBB-CCCC' },
+      });
+      const wrongCode = await call('/auth/recovery/start', {
+        method: 'POST',
+        body: { email: 'l1@route.test', code: 'AAAA-BBBB-CCCC' },
+      });
+
+      expect(unknown.status).toBe(wrongCode.status);
+      const a = (await unknown.json()) as { error: { code: string; message: string } };
+      const b = (await wrongCode.json()) as { error: { code: string; message: string } };
+      // Identical code AND identical wording: either differing would say whether the
+      // account exists.
+      expect(a.error.code).toBe(b.error.code);
+      expect(a.error.message).toBe(b.error.message);
+    });
+
+    it('redeems a valid code for a single-use ticket, and spends the code', async () => {
+      const code = await issueCode(USERS.L1);
+      const response = await call('/auth/recovery/start', {
+        method: 'POST',
+        body: { email: 'l1@route.test', code },
+      });
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as { ticket: string; remainingCodes: number };
+      expect(body.ticket.length).toBeGreaterThanOrEqual(32);
+
+      // The same code a second time is refused: single use means single use.
+      const replay = await call('/auth/recovery/start', {
+        method: 'POST',
+        body: { email: 'l1@route.test', code },
+      });
+      expect(replay.status).toBe(401);
+    });
+
+    it('does not sign anybody in — a ticket is not a session', async () => {
+      const code = await issueCode(USERS.L1);
+      const started = (await (
+        await call('/auth/recovery/start', {
+          method: 'POST',
+          body: { email: 'l1@route.test', code },
+        })
+      ).json()) as { ticket: string };
+
+      // The ticket must not be usable as a bearer token anywhere.
+      const asSession = await app.fetch(
+        new Request('https://api.solvaren.test/auth/session', {
+          headers: { Authorization: `Bearer ${started.ticket}`, Accept: 'application/json' },
+        }),
+        harness.env,
+      );
+      expect(asSession.status).toBe(401);
+    });
+
+    it('sets the new password and signs every session out', async () => {
+      const code = await issueCode(USERS.L1);
+      const started = (await (
+        await call('/auth/recovery/start', {
+          method: 'POST',
+          body: { email: 'l1@route.test', code },
+        })
+      ).json()) as { ticket: string };
+
+      const before = await harness.sql<{ count: string }[]>`
+        SELECT count(*)::text AS count FROM sessions
+         WHERE user_id = ${USERS.L1} AND revoked_at IS NULL
+      `;
+      expect(Number(before[0]!.count)).toBeGreaterThan(0);
+
+      const completed = await call('/auth/recovery/complete', {
+        method: 'POST',
+        body: { ticket: started.ticket, newPassword: NEW_PASSWORD },
+      });
+      expect(completed.status).toBe(200);
+
+      const after = await harness.sql<{ count: string }[]>`
+        SELECT count(*)::text AS count FROM sessions
+         WHERE user_id = ${USERS.L1} AND revoked_at IS NULL
+      `;
+      // If recovery was prompted by somebody else holding the old password, a surviving
+      // session is their way back in.
+      expect(after[0]!.count).toBe('0');
+
+      // And the new password actually works.
+      const login = await call('/auth/login', {
+        method: 'POST',
+        body: { email: 'l1@route.test', password: NEW_PASSWORD },
+      });
+      expect(login.status).toBe(200);
+      expect(((await login.json()) as { stage: string }).stage).toBe('AUTHENTICATED');
+    });
+
+    it('refuses a spent ticket, so one proof of identity resets one password', async () => {
+      const code = await issueCode(USERS.L1);
+      const started = (await (
+        await call('/auth/recovery/start', {
+          method: 'POST',
+          body: { email: 'l1@route.test', code },
+        })
+      ).json()) as { ticket: string };
+
+      await call('/auth/recovery/complete', {
+        method: 'POST',
+        body: { ticket: started.ticket, newPassword: 'first-recovered-pass-2026' },
+      });
+      const again = await call('/auth/recovery/complete', {
+        method: 'POST',
+        body: { ticket: started.ticket, newPassword: 'second-recovered-pass-2026' },
+      });
+      expect(again.status).toBe(401);
+    });
+
+    it('refuses an expired ticket', async () => {
+      const { hashSessionToken } = await import('./services/crypto.js');
+      const { randomToken } = await import('@solvaren/core');
+      const ticket = randomToken(32);
+
+      // Inserted already-aged rather than backdated by UPDATE: the guard trigger refuses to
+      // let a ticket's issue be rewritten, which is itself the behaviour we want.
+      await harness.sql`
+        UPDATE recovery_tickets SET consumed_at = now()
+         WHERE user_id = ${USERS.L1} AND consumed_at IS NULL
+      `;
+      await harness.sql`
+        INSERT INTO recovery_tickets (organization_id, user_id, ticket_hash, origin,
+                                      issued_at, expires_at)
+        VALUES (${ORG}, ${USERS.L1},
+                ${await hashSessionToken(ticket, harness.env.SESSION_SIGNING_KEY)},
+                'RECOVERY_CODE', now() - interval '30 minutes', now() - interval '15 minutes')
+      `;
+
+      const response = await call('/auth/recovery/complete', {
+        method: 'POST',
+        body: { ticket, newPassword: 'expired-ticket-pass-2026' },
+      });
+      expect(response.status).toBe(401);
+    });
+
+    it('refuses a short password and refuses reusing the current one', async () => {
+      const code = await issueCode(USERS.L1);
+      const started = (await (
+        await call('/auth/recovery/start', {
+          method: 'POST',
+          body: { email: 'l1@route.test', code },
+        })
+      ).json()) as { ticket: string };
+
+      expect(
+        (
+          await call('/auth/recovery/complete', {
+            method: 'POST',
+            body: { ticket: started.ticket, newPassword: 'short' },
+          })
+        ).status,
+      ).toBe(422);
+
+      // The current password is whatever the last successful recovery set.
+      const reuse = await call('/auth/recovery/complete', {
+        method: 'POST',
+        body: { ticket: started.ticket, newPassword: 'first-recovered-pass-2026' },
+      });
+      expect(reuse.status).toBe(422);
+      expect(((await reuse.json()) as { error: { code: string } }).error.code).toBe(
+        'PASSWORD_UNCHANGED',
+      );
+    });
+
+    it('will not recover a disabled account, and says so loudly in the security log', async () => {
+      const code = await issueCode(USERS.L2);
+      await harness.sql`UPDATE users SET status = 'DISABLED' WHERE id = ${USERS.L2}`;
+
+      const response = await call('/auth/recovery/start', {
+        method: 'POST',
+        body: { email: 'l2@route.test', code },
+      });
+      expect(response.status).toBe(401);
+
+      const events = await harness.sql<{ severity: string }[]>`
+        SELECT severity FROM security_events WHERE event_type = 'RECOVERY_ON_DISABLED_ACCOUNT'
+      `;
+      expect(events[0]!.severity).toBe('CRITICAL');
+
+      await harness.sql`UPDATE users SET status = 'ACTIVE' WHERE id = ${USERS.L2}`;
+    });
+
+    describe('administrative recovery', () => {
+      beforeAll(reissueSessions);
+
+      it('is refused to everyone below L3', async () => {
+        for (const level of ['L1', 'L2'] as AuthorityLevel[]) {
+          const response = await call(`/admin/users/${USERS.L1}/reset-access`, {
+            level,
+            method: 'POST',
+            body: { reason: 'Attempting a reset without the authority for it' },
+          });
+          expect(response.status).toBe(403);
+        }
+      });
+
+      it('refuses an executive resetting their own access', async () => {
+        const response = await call(`/admin/users/${USERS.L3}/reset-access`, {
+          level: 'L3',
+          method: 'POST',
+          body: { reason: 'Trying to re-key the account I am signed in to' },
+        });
+        expect(response.status).toBe(422);
+        expect(((await response.json()) as { error: { code: string } }).error.code).toBe(
+          'CANNOT_RESET_SELF',
+        );
+      });
+
+      it('mints a one-time password, kills the sessions and records the reason', async () => {
+        const response = await call(`/admin/users/${USERS.L1}/reset-access`, {
+          level: 'L3',
+          method: 'POST',
+          body: { reason: 'Employee forgot their password and has no recovery codes left' },
+        });
+        expect(response.status).toBe(200);
+        const body = (await response.json()) as { oneTimePassword: string; status: string };
+        expect(body.oneTimePassword.length).toBeGreaterThan(8);
+
+        const live = await harness.sql<{ count: string }[]>`
+          SELECT count(*)::text AS count FROM sessions
+           WHERE user_id = ${USERS.L1} AND revoked_at IS NULL
+        `;
+        expect(live[0]!.count).toBe('0');
+
+        // The issued password works, which is the whole point of the exercise.
+        const login = await call('/auth/login', {
+          method: 'POST',
+          body: { email: 'l1@route.test', password: body.oneTimePassword },
+        });
+        expect(login.status).toBe(200);
+
+        const audit = await harness.sql<{ detail: { reason?: string } }[]>`
+          SELECT detail FROM audit_events WHERE action = 'user.access_reset'
+           ORDER BY sequence DESC LIMIT 1
+        `;
+        expect(audit[0]!.detail.reason).toContain('forgot their password');
+      });
+
+      it('parks a privileged account pending enrolment when its keys are revoked', async () => {
+        const response = await call(`/admin/users/${USERS.L2}/reset-access`, {
+          level: 'L3',
+          method: 'POST',
+          body: {
+            reason: 'Laptop and security key both lost in transit',
+            revokeAuthenticators: true,
+          },
+        });
+        expect(response.status).toBe(200);
+        const body = (await response.json()) as { status: string; authenticatorsRevoked: boolean };
+        // An L2 with no authenticator cannot sign in, so ACTIVE would be a lie.
+        expect(body.status).toBe('PENDING_ENROLMENT');
+        expect(body.authenticatorsRevoked).toBe(true);
+      });
+
+      it('raises a CRITICAL security event when one executive re-keys another', async () => {
+        // Seeded so there is a second L3 to recover; re-keying an executive is the move a
+        // hostile insider would make, so it must be loud.
+        const other = '00000000-0000-0000-0000-00000000e203';
+        await harness.sql`
+          INSERT INTO users (id, organization_id, email, full_name, authority_level,
+                             password_hash, authorization_pin_hash)
+          VALUES (${other}, ${ORG}, 'l3b@route.test', 'Second Executive', 'L3',
+                  ${await hashPassword('another-executive-password')},
+                  ${await hashAuthorizationPin('918273', other)})
+          ON CONFLICT (id) DO NOTHING
+        `;
+
+        const response = await call(`/admin/users/${other}/reset-access`, {
+          level: 'L3',
+          method: 'POST',
+          body: { reason: 'Colleague locked out before the month-end payment run' },
+        });
+        expect(response.status).toBe(200);
+
+        const events = await harness.sql<{ severity: string }[]>`
+          SELECT severity FROM security_events
+           WHERE event_type = 'ACCESS_RESET_BY_ADMINISTRATOR' AND user_id = ${other}
+        `;
+        expect(events[0]!.severity).toBe('CRITICAL');
+      });
+    });
+  });
+
   describe('conflict of interest', () => {
     let conflictId = '';
 
