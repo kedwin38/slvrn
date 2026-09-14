@@ -286,6 +286,44 @@ fi
 
 # ---------------------------------------------------------------------------
 echo ""
+echo "The console can reach its API"
+# ---------------------------------------------------------------------------
+
+# These three held a live deployment down. The console and the API are separate services on
+# separate domains, and every part of that has to agree or sign-in fails with an error that
+# names none of the causes.
+
+# 1. The CSP is same-origin by default, so the API's origin has to be added at build time.
+#    apps/web/vite.config.ts rewrites this exact directive; if it is renamed or pre-widened
+#    by hand, the rewrite silently stops matching and the browser blocks every API call.
+csp="$(tr -d '\n' < apps/web/index.html |
+  grep -o 'http-equiv="Content-Security-Policy"[^>]*content="[^"]*"' || true)"
+if [ -z "$csp" ]; then
+  fail "apps/web/index.html has no Content-Security-Policy meta element"
+elif ! printf '%s' "$csp" | grep -q "connect-src 'self'"; then
+  fail "the console's CSP no longer contains \"connect-src 'self'\" for the build to rewrite"
+else
+  pass "the console's CSP exposes connect-src for the build to widen to the API origin"
+fi
+
+# 2. The build must refuse to produce a bundle with no API address. Vite inlines the value,
+#    so an unconfigured bundle is permanently broken and cannot be repaired by a restart.
+if grep -q 'VITE_API_BASE_URL is not set' apps/web/vite.config.ts 2>/dev/null; then
+  pass "the console build refuses to run without VITE_API_BASE_URL"
+else
+  fail "apps/web/vite.config.ts no longer fails the build when VITE_API_BASE_URL is missing"
+fi
+
+# 3. No silent fallback in the client. '/api' reads like a safe default; it makes the console
+#    call itself, and the static server answers with index.html or a 405.
+if grep -qE "VITE_API_BASE_URL.*\?\?\s*'/" apps/web/src/lib/api.ts 2>/dev/null; then
+  fail "apps/web/src/lib/api.ts defaults the API base to a path; misconfiguration must not be silent"
+else
+  pass "the API client has no silent path fallback for the API base URL"
+fi
+
+# ---------------------------------------------------------------------------
+echo ""
 if [ "$failures" -eq 0 ]; then
   printf '\033[32m%d invariants hold.\033[0m\n\n' "$checks"
   exit 0

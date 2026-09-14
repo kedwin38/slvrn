@@ -115,10 +115,29 @@ runtime one:
 VITE_API_BASE_URL=https://api.solvaren.example
 ```
 
-Set it under the service's build variables, then deploy. If `APP_ORIGIN` on the API does
-not exactly match the console's public URL, every request fails CORS — that is the single
-most common way this deployment goes wrong, and the symptom (every call failing, no useful
-error) does not point at the cause.
+Set it under the service's build variables, then deploy. **Changing it requires a rebuild,
+not a restart** — the value is compiled into the JavaScript.
+
+The build now refuses to run without it. That is deliberate: an unconfigured bundle called
+the console's own origin, the static server answered with `index.html` or a 405, and the
+first anyone knew of it was an operator who could not sign in.
+
+This value does one more thing than name an address. The console ships a `default-src
+'none'` CSP with `connect-src 'self'`, and the API is a different origin, so the build
+appends exactly this URL's origin to `connect-src`. Get it wrong and the browser blocks
+every API call _before it reaches the network_, which looks identical to the API being
+down — no request in the API's logs, no CORS message, just a failure to connect. Check it
+after deploying:
+
+```bash
+curl -s https://<console-url>/ | grep -o "connect-src[^;]*"
+# connect-src 'self' https://api.solvaren.example
+```
+
+Then confirm the other direction: if `APP_ORIGIN` on the API does not exactly match the
+console's public URL, every request fails CORS instead. The two settings are a pair — the
+CSP decides whether the browser will send the request, `APP_ORIGIN` decides whether the API
+will accept it, and both symptoms look like an outage.
 
 ### 7. First administrator
 
@@ -208,6 +227,8 @@ a rewrite. The queue is in PostgreSQL, so the worker replica needs no additional
 - [ ] `DATABASE_URL` uses the private `*.railway.internal` host
 - [ ] `SESSION_SIGNING_KEY` and `SECRET_ENCRYPTION_KEY` are distinct and freshly generated
 - [ ] `APP_ORIGIN` exactly matches the console's public URL
+- [ ] `VITE_API_BASE_URL` was set **at build time** and the console was rebuilt after it changed
+- [ ] The deployed console's `connect-src` names the API's origin (see step 6)
 - [ ] `WEBAUTHN_RP_ID` is the `APP_ORIGIN` host or a registrable parent of it
 - [ ] `DARAJA_ENVIRONMENT=production` only where `ENVIRONMENT=production`
 - [ ] `pnpm verify` passes on the deployed commit (350 tests, 53 DB assertions, 34 invariants)

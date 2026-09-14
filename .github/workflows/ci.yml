@@ -212,7 +212,29 @@ jobs:
           fi
 
       - name: Build the console
+        # The build refuses to run without this, on purpose: Vite inlines it, so a bundle
+        # built without it cannot reach the API and says nothing about why.
+        env:
+          VITE_API_BASE_URL: https://api.example.test
         run: pnpm --filter @solvaren/web build
+
+      - name: The console's CSP must allow its own API origin
+        run: |
+          set -euo pipefail
+          # Regression guard for the sign-in failure caused by connect-src 'self' while the
+          # API sits on its own domain: the browser blocks every call before it reaches the
+          # network, which is indistinguishable from the API being down.
+          policy="$(tr -d '\n' < apps/web/dist/index.html \
+            | grep -o 'http-equiv="Content-Security-Policy"[^>]*content="[^"]*"' || true)"
+          if [ -z "$policy" ]; then
+            echo "::error::no Content-Security-Policy meta element in the built console"
+            exit 1
+          fi
+          case "$policy" in
+            *"connect-src 'self' https://api.example.test"*) ;;
+            *) echo "::error::built CSP does not permit the API origin: $policy"; exit 1 ;;
+          esac
+          echo "CSP permits the configured API origin."
 
       - name: Enforce the bundle budget
         run: |
@@ -226,6 +248,17 @@ jobs:
             echo "::error::bundle is over budget"
             exit 1
           fi
+
+      # Runs last: it deliberately fails a build, and everything above reads apps/web/dist.
+      - name: A console built without an API address must fail, not ship
+        run: |
+          set -euo pipefail
+          if pnpm --filter @solvaren/web build > /tmp/unconfigured.log 2>&1; then
+            echo "::error::the console built with no VITE_API_BASE_URL; it would not reach the API"
+            exit 1
+          fi
+          grep -q 'VITE_API_BASE_URL is not set' /tmp/unconfigured.log
+          echo "Refused to build an unconfigured console, as intended."
 
   # -------------------------------------------------------------------------
   docker:

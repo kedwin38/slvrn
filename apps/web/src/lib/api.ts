@@ -50,7 +50,19 @@ export class ApiError extends Error {
   }
 }
 
-const API_BASE = (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? '/api';
+/*
+ * Where the API lives, inlined by Vite at build time.
+ *
+ * There is deliberately no meaningful fallback. An earlier version defaulted to '/api',
+ * which read as a safe default and was not one: when the variable was missing the console
+ * called *itself*, the static file server answered with index.html or 405, and the only
+ * thing the user saw was a generic failure that pointed at neither the cause nor the fix.
+ *
+ * `apps/web/vite.config.ts` now fails the production build when this is unset, so an
+ * unconfigured bundle cannot be produced at all. The empty string here is what `vite dev`
+ * uses to talk to a same-origin dev proxy, and nothing else relies on it.
+ */
+const API_BASE = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim() ?? '';
 
 let sessionToken: string | null = null;
 
@@ -109,10 +121,12 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
 
   const text = await response.text();
   let payload: unknown = null;
+  let unparseable = false;
   try {
     payload = text ? JSON.parse(text) : null;
   } catch {
     payload = null;
+    unparseable = true;
   }
 
   if (!response.ok) {
@@ -125,6 +139,22 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
         message: `The server returned ${response.status}.`,
       },
     );
+  }
+
+  /*
+   * A 2xx that is not JSON means we are not talking to the API at all — the usual cause is
+   * a console pointed at its own origin, where the static server answers every unknown path
+   * with index.html and HTTP 200. Returning null here instead would push a TypeError into
+   * whichever caller unpacked the result, and the user would be told the network was down.
+   */
+  if (unparseable) {
+    throw new ApiError(response.status, {
+      code: 'UNEXPECTED_RESPONSE',
+      category: 'INTERNAL',
+      message:
+        'The server returned a response that was not JSON. The console is configured with ' +
+        'the wrong API address.',
+    });
   }
 
   return payload as T;

@@ -26,8 +26,14 @@
       an injected script must have nowhere to load from and nowhere to send data.
 
       `frame-ancestors` is deliberately absent here: it is ignored when delivered via a
-      <meta> element. It is set as a response header in public/_headers, alongside
+      <meta> element. It is set as a response header in apps/web/nginx.conf, alongside
       X-Frame-Options for older agents.
+
+      `connect-src 'self'` is REWRITTEN AT BUILD TIME by apps/web/vite.config.ts, which
+      appends the origin of VITE_API_BASE_URL. Leave the literal string intact: the build
+      fails loudly if it cannot find it. On Railway the API is a separate service on its own
+      domain, and without that rewrite the browser blocks every API call before it reaches
+      the network — which looks exactly like the API being down.
     -->
     <meta
       http-equiv="Content-Security-Policy"

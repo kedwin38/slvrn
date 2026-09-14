@@ -114,6 +114,21 @@ build args, pass it explicitly as --build-arg VITE_API_BASE_URL=...
 
 Changing this value requires a REBUILD, not a restart.
 
+The build FAILS if this is missing, by design, with a message naming it. If the
+console build stops with "VITE_API_BASE_URL is not set", that is this variable
+not reaching the build step — not a code error. Do not work around it by
+editing the app.
+
+This value also drives the console's Content-Security-Policy. The console ships
+default-src 'none' with connect-src 'self', and the API is a different origin,
+so the build appends this URL's origin to connect-src. If it is wrong, the
+browser refuses every API call BEFORE sending it: nothing appears in the API's
+logs, and the console reports only that it could not connect. After deploying,
+confirm the policy actually names the API:
+
+  curl -s https://<solvaren-web domain>/ | grep -o "connect-src[^;]*"
+    expect: connect-src 'self' https://<solvaren-api domain>
+
 ================================================================
 STEP 4 — Object storage (REQUIRED; the API will not boot without it)
 ================================================================
@@ -189,6 +204,16 @@ Verify, and report the actual output of each:
 
   open https://<solvaren-web domain>
     expect: the SOLVAREN sign-in page renders
+
+  curl -s https://<solvaren-web domain>/ | grep -o "connect-src[^;]*"
+    expect: connect-src 'self' https://<solvaren-api domain>
+    if it reads just "connect-src 'self'", VITE_API_BASE_URL did not reach the
+    console BUILD. Sign-in will fail with a generic connection error and the
+    API will log nothing at all, because the browser blocks the request before
+    sending it. Fix the build variable and REBUILD the console.
+
+  Then actually sign in. A page that renders proves nothing: the console is
+  static, so it renders fine with no working API whatsoever.
 
 In the API deploy logs you should see, as JSON lines:
   "Queue workers started"     with four queues listed
