@@ -152,6 +152,64 @@ async function main() {
     }
   }
 
+  /*
+   * --- The modules the console offers are actually deployed -----------------
+   *
+   * A 401 proves the route exists and is guarded. A 404 would mean the console renders a
+   * screen whose endpoint was never deployed — which looks like a broken feature to the
+   * operator and like a successful deploy to everyone else. Checking for "guarded" rather
+   * than "reachable" is the point: these must never answer an unauthenticated caller.
+   */
+  if (apiBase) {
+    const guarded = [
+      ['/admin/users', 'user management'],
+      ['/admin/daraja', 'M-PESA credentials'],
+      ['/admin/policies', 'policy settings'],
+      ['/admin/audit', 'audit trail'],
+      ['/batches', 'batch preparation'],
+    ];
+
+    for (const [path, label] of guarded) {
+      try {
+        const res = await fetchWithTimeout(`${apiBase}${path}`);
+        record(res.status === 401, `${label} is deployed and guarded`, `${path} -> ${res.status}`);
+      } catch (error) {
+        record(false, `${label} is deployed and guarded`, error.message);
+      }
+    }
+  }
+
+  /*
+   * --- The console actually ships those screens -----------------------------
+   *
+   * The API having an endpoint and the console having a screen for it are independent
+   * facts, and the gap between them is exactly what made this system undeployable: every
+   * one of these endpoints existed for weeks with nothing calling them. Checking the served
+   * bundle for the screens' own text is the cheapest way to notice that gap reappearing.
+   */
+  if (appOrigin) {
+    try {
+      const html = await (await fetchWithTimeout(appOrigin)).text();
+      const scripts = [...html.matchAll(/src="([^"]+\.js)"/g)].map((m) => m[1]);
+      const bundles = await Promise.all(
+        scripts.map(async (src) => (await fetchWithTimeout(new URL(src, appOrigin))).text()),
+      );
+      const all = bundles.join('');
+
+      for (const [needle, label] of [
+        ['New payment batch', 'batch creation'],
+        ['Authorization PIN', 'account security'],
+        ['M-PESA credentials', 'M-PESA credentials'],
+        ['Audit trail', 'audit trail'],
+        ['Members', 'member management'],
+      ]) {
+        record(all.includes(needle), `the console ships the ${label} screen`, needle);
+      }
+    } catch (error) {
+      record(false, 'the console ships its admin screens', error.message);
+    }
+  }
+
   // --- A real credential produces a real session ---------------------------
   if (demo && apiBase) {
     const login = (email, password) =>
