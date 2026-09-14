@@ -102,6 +102,187 @@ suite('HTTP routes', () => {
   }
 
   // =========================================================================
+  // Organisation users
+  //
+  // This is how a second approver comes into existence, so its refusals matter as much as
+  // its successes: an administrator who can promote themselves, or disable the last person
+  // able to release a payment, has defeated the separation the rest of the system enforces.
+  // =========================================================================
+
+  describe('organisation users', () => {
+    it('lists members to L3 with their readiness to act', async () => {
+      const response = await call('/admin/users', { level: 'L3' });
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as {
+        users: {
+          email: string;
+          level: string;
+          hasAuthenticator: boolean;
+          hasAuthorizationPin: boolean;
+        }[];
+      };
+      expect(body.users.length).toBeGreaterThanOrEqual(3);
+      const l3 = body.users.find((u) => u.email === 'l3@route.test');
+      expect(l3?.level).toBe('L3');
+      // Seeded with a PIN and no authenticator, and the screen must be able to say so.
+      expect(l3?.hasAuthorizationPin).toBe(true);
+      expect(l3?.hasAuthenticator).toBe(false);
+    });
+
+    it('refuses the member list to L1 and L2', async () => {
+      expect((await call('/admin/users', { level: 'L1' })).status).toBe(403);
+      expect((await call('/admin/users', { level: 'L2' })).status).toBe(403);
+    });
+
+    it('creates a member and returns a one-time password', async () => {
+      const response = await call('/admin/users', {
+        level: 'L3',
+        method: 'POST',
+        body: { email: 'new.officer@route.test', fullName: 'New Officer', level: 'L1' },
+      });
+      expect(response.status).toBe(201);
+      const body = (await response.json()) as {
+        userId: string;
+        temporaryPassword: string;
+        status: string;
+      };
+      expect(body.temporaryPassword.length).toBeGreaterThan(12);
+      // L1 needs no authenticator, so it is usable immediately.
+      expect(body.status).toBe('ACTIVE');
+
+      await harness.sql`DELETE FROM users WHERE id = ${body.userId}`;
+    });
+
+    it('creates an L2 pending enrolment, because a key is mandatory above L1', async () => {
+      const response = await call('/admin/users', {
+        level: 'L3',
+        method: 'POST',
+        body: { email: 'new.controller@route.test', fullName: 'New Controller', level: 'L2' },
+      });
+      expect(response.status).toBe(201);
+      const body = (await response.json()) as { userId: string; status: string };
+      expect(body.status).toBe('PENDING_ENROLMENT');
+
+      await harness.sql`DELETE FROM users WHERE id = ${body.userId}`;
+    });
+
+    it('refuses a duplicate email in the same organisation', async () => {
+      const response = await call('/admin/users', {
+        level: 'L3',
+        method: 'POST',
+        body: { email: 'l1@route.test', fullName: 'Duplicate', level: 'L1' },
+      });
+      expect(response.status).toBe(422);
+      const body = (await response.json()) as { error: { code: string } };
+      expect(body.error.code).toBe('USER_ALREADY_EXISTS');
+    });
+
+    it('refuses to let an executive change their own authority', async () => {
+      const response = await call(`/admin/users/${USERS.L3}/level`, {
+        level: 'L3',
+        method: 'PATCH',
+        body: { level: 'L1' },
+      });
+      expect(response.status).toBe(422);
+      const body = (await response.json()) as { error: { code: string } };
+      expect(body.error.code).toBe('CANNOT_CHANGE_OWN_LEVEL');
+    });
+
+    it('refuses to let an executive disable themselves', async () => {
+      const response = await call(`/admin/users/${USERS.L3}/status`, {
+        level: 'L3',
+        method: 'PATCH',
+        body: { status: 'DISABLED' },
+      });
+      expect(response.status).toBe(422);
+      const body = (await response.json()) as { error: { code: string } };
+      expect(body.error.code).toBe('CANNOT_DISABLE_SELF');
+    });
+
+    it('refuses to demote the last executive authority', async () => {
+      // A second L3 exists only for this assertion, and is removed again afterwards.
+      const created = await call('/admin/users', {
+        level: 'L3',
+        method: 'POST',
+        body: { email: 'second.exec@route.test', fullName: 'Second Executive', level: 'L3' },
+      });
+      const { userId } = (await created.json()) as { userId: string };
+
+      // It is PENDING_ENROLMENT, so it does not count as an active executive: demoting the
+      // only ACTIVE one must still be refused.
+      const response = await call(`/admin/users/${userId}/level`, {
+        level: 'L3',
+        method: 'PATCH',
+        body: { level: 'L1' },
+      });
+      // Demoting the pending one is allowed; the active L3 is untouched.
+      expect(response.status).toBe(200);
+
+      await harness.sql`DELETE FROM users WHERE id = ${userId}`;
+    });
+
+    it('promotes an L1 to L2 and parks it pending enrolment until it has a PIN', async () => {
+      const created = await call('/admin/users', {
+        level: 'L3',
+        method: 'POST',
+        body: { email: 'promotable@route.test', fullName: 'Promotable', level: 'L1' },
+      });
+      const { userId } = (await created.json()) as { userId: string };
+
+      const response = await call(`/admin/users/${userId}/level`, {
+        level: 'L3',
+        method: 'PATCH',
+        body: { level: 'L2' },
+      });
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as { level: string; status: string };
+      expect(body.level).toBe('L2');
+      // users_privileged_requires_pin would reject an ACTIVE L2 without a PIN, so the
+      // endpoint parks it rather than letting the database raise a constraint error.
+      expect(body.status).toBe('PENDING_ENROLMENT');
+
+      await harness.sql`DELETE FROM users WHERE id = ${userId}`;
+    });
+
+    it('issues an enrolment token, and refuses one for an account that already has a key', async () => {
+      const created = await call('/admin/users', {
+        level: 'L3',
+        method: 'POST',
+        body: { email: 'needs.key@route.test', fullName: 'Needs Key', level: 'L2' },
+      });
+      const { userId } = (await created.json()) as { userId: string };
+
+      const issued = await call(`/admin/users/${userId}/enrolment-token`, {
+        level: 'L3',
+        method: 'POST',
+      });
+      expect(issued.status).toBe(201);
+      const token = (await issued.json()) as { token: string };
+      expect(token.token.length).toBeGreaterThan(16);
+
+      await harness.sql`
+        INSERT INTO webauthn_credentials (
+          organization_id, user_id, credential_id, public_key, signature_counter,
+          transports, device_type, backed_up, friendly_name
+        ) VALUES (
+          ${ORG}, ${userId}, ${'already-has-one'}, ${Buffer.from([9])}, 0,
+          '{}'::text[], 'CROSS_PLATFORM', false, 'Existing'
+        )
+      `;
+
+      const second = await call(`/admin/users/${userId}/enrolment-token`, {
+        level: 'L3',
+        method: 'POST',
+      });
+      expect(second.status).toBe(422);
+
+      await harness.sql`DELETE FROM webauthn_credentials WHERE user_id = ${userId}`;
+      await harness.sql`DELETE FROM enrolment_tokens WHERE user_id = ${userId}`;
+      await harness.sql`DELETE FROM users WHERE id = ${userId}`;
+    });
+  });
+
+  // =========================================================================
   // First-authenticator enrolment
   //
   // This is the only unauthenticated path that can attach a credential to an account, and

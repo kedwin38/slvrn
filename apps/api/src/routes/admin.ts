@@ -16,6 +16,7 @@ import {
   validationError,
   stateError,
   verifyChain,
+  randomToken,
   GENESIS_HASH,
   type AuditEvent,
 } from '@solvaren/core';
@@ -33,7 +34,7 @@ import {
   maskConfig,
   type DarajaConfigRow,
 } from '../services/daraja-config.js';
-import { encryptSecret } from '../services/crypto.js';
+import { encryptSecret, hashPassword, sha256Hex } from '../services/crypto.js';
 import { assertFreshAuthentication, assertWebAuthnSession } from '../services/auth.js';
 import { createSecretStore, secretReference } from '../services/daraja-config.js';
 import type { AppContext, BackupQueueMessage } from '../env.js';
@@ -889,5 +890,416 @@ adminRoutes.post(
         ? 'Every event in this range hashes to its recorded digest and links to its predecessor. No event has been added, removed, reordered or altered.'
         : 'The chain does not verify. An event has been altered or removed at the reported position. Preserve the database and follow docs/runbooks/audit-incident.md.',
     });
+  },
+);
+
+// ---------------------------------------------------------------------------
+// Organisation users (L3 ONLY)
+//
+// The admin:users permission existed from the start and nothing implemented it: creating a
+// user meant running scripts/create-user.mjs against the database, which is not something
+// an organisation administrator can do on a deployed system. A payment platform that cannot
+// onboard a second approver cannot enforce separation of duties in practice, because there
+// is nobody else to approve.
+//
+// What this deliberately does NOT do is edit the permission matrix. Authority levels are
+// fixed in packages/core/src/rbac.ts, and an administrator who can grant themselves release
+// rights is an administrator who has defeated separation of duties. Assigning a LEVEL to a
+// person is the intended control; redefining what a level may do is a code change.
+// ---------------------------------------------------------------------------
+
+const createUserSchema = z.object({
+  email: z.string().trim().email().max(320),
+  fullName: z.string().trim().min(2).max(120),
+  level: z.enum(['L1', 'L2', 'L3']),
+});
+
+/** A readable one-time password. Words beat character soup for a credential read aloud. */
+function generatePassphrase(): string {
+  const words = [
+    'harbour',
+    'lantern',
+    'meridian',
+    'quartz',
+    'sable',
+    'thicket',
+    'vellum',
+    'willow',
+    'anchor',
+    'basalt',
+    'cinder',
+    'dovetail',
+    'ember',
+    'fathom',
+    'granite',
+    'hollow',
+  ];
+  const picked: string[] = [];
+  const bytes = new Uint8Array(4);
+  crypto.getRandomValues(bytes);
+  for (const b of bytes) picked.push(words[b % words.length]!);
+  const suffix = new Uint8Array(2);
+  crypto.getRandomValues(suffix);
+  return `${picked.join('-')}-${(suffix[0]! * 256 + suffix[1]!) % 10000}`;
+}
+
+/** GET /admin/users — who is in this organisation, and can they actually act. */
+adminRoutes.get('/users', requireExactLevel('L3'), requirePermissions('admin:users'), async (c) => {
+  const actor = actorOf(c);
+
+  const users = await withConnection(c.env, async (sql) => {
+    const rows = await sql<
+      {
+        id: string;
+        email: string;
+        full_name: string;
+        authority_level: string;
+        status: string;
+        created_at: string;
+        last_login_at: string | null;
+        has_authenticator: boolean;
+        has_pin: boolean;
+      }[]
+    >`
+        SELECT u.id, u.email, u.full_name, u.authority_level, u.status, u.created_at,
+               u.last_login_at,
+               EXISTS (
+                 SELECT 1 FROM webauthn_credentials w
+                  WHERE w.user_id = u.id AND w.status = 'ACTIVE'
+               ) AS has_authenticator,
+               (u.authorization_pin_hash IS NOT NULL) AS has_pin
+          FROM users u
+         WHERE u.organization_id = ${actor.organizationId}
+         ORDER BY u.authority_level DESC, u.email
+      `;
+
+    return rows.map((r) => ({
+      userId: r.id,
+      email: r.email,
+      fullName: r.full_name,
+      level: r.authority_level,
+      status: r.status,
+      createdAt: new Date(r.created_at).toISOString(),
+      lastLoginAt: r.last_login_at ? new Date(r.last_login_at).toISOString() : null,
+      // Surfaced because an account missing either cannot complete a release, and the
+      // administrator should see that before a payroll run rather than during one.
+      hasAuthenticator: r.has_authenticator,
+      hasAuthorizationPin: r.has_pin,
+    }));
+  });
+
+  return c.json({ users });
+});
+
+/** POST /admin/users — create a member and return a one-time password. */
+adminRoutes.post(
+  '/users',
+  requireExactLevel('L3'),
+  requirePermissions('admin:users'),
+  async (c) => {
+    const actor = actorOf(c);
+    assertFreshAuthentication(actor);
+    assertWebAuthnSession(actor);
+
+    const body = createUserSchema.parse(await c.req.json());
+    const correlationId = c.get('correlationId');
+    const passphrase = generatePassphrase();
+    const passwordHash = await hashPassword(passphrase);
+
+    const created = await withConnection(c.env, (sql) =>
+      inTransaction(sql, async (tx) => {
+        const existing = await tx<{ id: string }[]>`
+          SELECT id FROM users
+           WHERE organization_id = ${actor.organizationId} AND email = ${body.email.toLowerCase()}
+           LIMIT 1
+        `;
+        if (existing.length > 0) {
+          throw validationError(
+            'USER_ALREADY_EXISTS',
+            'Someone with that email address is already a member of this organisation',
+          );
+        }
+
+        // L1 can work as soon as it has a password. Above L1 a WebAuthn credential is
+        // mandatory, so the account starts PENDING_ENROLMENT and becomes ACTIVE when the
+        // first authenticator is registered.
+        const status = body.level === 'L1' ? 'ACTIVE' : 'PENDING_ENROLMENT';
+
+        const rows = await tx<{ id: string }[]>`
+          INSERT INTO users (organization_id, email, full_name, authority_level,
+                             password_hash, status)
+          VALUES (${actor.organizationId}, ${body.email.toLowerCase()}, ${body.fullName},
+                  ${body.level}, ${passwordHash}, ${status})
+          RETURNING id
+        `;
+        const user = rows[0]!;
+
+        await writeAuditEvent(tx, {
+          organizationId: actor.organizationId,
+          actorId: actor.userId,
+          actorLevel: actor.level,
+          eventClass: 'IDENTITY',
+          action: 'admin.user.created',
+          objectType: 'User',
+          objectId: user.id,
+          outcome: 'SUCCESS',
+          newState: { level: body.level, status },
+          correlationId,
+          securityContext: c.get('securityContext'),
+          detail: { email: body.email.toLowerCase(), level: body.level },
+        });
+
+        return { userId: user.id, status };
+      }),
+    );
+
+    return c.json(
+      {
+        userId: created.userId,
+        email: body.email.toLowerCase(),
+        level: body.level,
+        status: created.status,
+        // Shown once, never stored in the clear. The caller is told to hand it over out of
+        // band, the same rule scripts/create-user.mjs follows.
+        temporaryPassword: passphrase,
+      },
+      201,
+    );
+  },
+);
+
+/** PATCH /admin/users/:id/status — enable or disable a member. */
+adminRoutes.patch(
+  '/users/:id/status',
+  requireExactLevel('L3'),
+  requirePermissions('admin:users'),
+  async (c) => {
+    const actor = actorOf(c);
+    const userId = c.req.param('id');
+    const body = z.object({ status: z.enum(['ACTIVE', 'DISABLED']) }).parse(await c.req.json());
+    const correlationId = c.get('correlationId');
+
+    if (userId === actor.userId) {
+      throw validationError(
+        'CANNOT_DISABLE_SELF',
+        'You cannot change your own status. Ask another executive authority.',
+      );
+    }
+
+    const result = await withConnection(c.env, (sql) =>
+      inTransaction(sql, async (tx) => {
+        const rows = await tx<{ id: string; authority_level: string; status: string }[]>`
+          SELECT id, authority_level, status FROM users
+           WHERE id = ${userId} AND organization_id = ${actor.organizationId} LIMIT 1
+        `;
+        const target = rows[0];
+        if (!target) throw validationError('USER_NOT_FOUND', 'No such user in this organisation');
+
+        /*
+         * Never leave an organisation without an executive authority. L3 is the only level
+         * that can release a payment or administer anything, so disabling the last active
+         * one locks everybody out permanently — there is no support desk to call.
+         */
+        if (body.status === 'DISABLED' && target.authority_level === 'L3') {
+          const remaining = await tx<{ count: string }[]>`
+            SELECT count(*)::text AS count FROM users
+             WHERE organization_id = ${actor.organizationId}
+               AND authority_level = 'L3' AND status = 'ACTIVE' AND id <> ${userId}
+          `;
+          if (Number(remaining[0]?.count ?? '0') === 0) {
+            throw validationError(
+              'LAST_EXECUTIVE_AUTHORITY',
+              'This is the last active executive authority. Promote another before disabling it, or nobody will be able to release a payment.',
+            );
+          }
+        }
+
+        await tx`UPDATE users SET status = ${body.status} WHERE id = ${userId}`;
+
+        // A disabled account must not keep a live session.
+        if (body.status === 'DISABLED') {
+          await tx`UPDATE sessions SET revoked_at = now() WHERE user_id = ${userId} AND revoked_at IS NULL`;
+        }
+
+        await writeAuditEvent(tx, {
+          organizationId: actor.organizationId,
+          actorId: actor.userId,
+          actorLevel: actor.level,
+          eventClass: 'IDENTITY',
+          action: 'admin.user.status_changed',
+          objectType: 'User',
+          objectId: userId,
+          outcome: 'SUCCESS',
+          previousState: { status: target.status },
+          newState: { status: body.status },
+          correlationId,
+          securityContext: c.get('securityContext'),
+          detail: {},
+        });
+
+        return { status: body.status };
+      }),
+    );
+
+    return c.json(result);
+  },
+);
+
+/** PATCH /admin/users/:id/level — assign an authority level. */
+adminRoutes.patch(
+  '/users/:id/level',
+  requireExactLevel('L3'),
+  requirePermissions('admin:users'),
+  async (c) => {
+    const actor = actorOf(c);
+    const userId = c.req.param('id');
+    const body = z.object({ level: z.enum(['L1', 'L2', 'L3']) }).parse(await c.req.json());
+    const correlationId = c.get('correlationId');
+
+    /*
+     * Changing authority is the most consequential thing on this screen: it is how someone
+     * gains the ability to release money. It therefore requires the same proof as rotating
+     * payment credentials — recent authentication and a WebAuthn session — and can never be
+     * applied to oneself, which would make self-promotion a single click.
+     */
+    assertFreshAuthentication(actor);
+    assertWebAuthnSession(actor);
+
+    if (userId === actor.userId) {
+      throw validationError(
+        'CANNOT_CHANGE_OWN_LEVEL',
+        'You cannot change your own authority level. Ask another executive authority.',
+      );
+    }
+
+    const result = await withConnection(c.env, (sql) =>
+      inTransaction(sql, async (tx) => {
+        const rows = await tx<
+          { id: string; authority_level: string; status: string; pin: string | null }[]
+        >`
+          SELECT id, authority_level, status, authorization_pin_hash AS pin FROM users
+           WHERE id = ${userId} AND organization_id = ${actor.organizationId} LIMIT 1
+        `;
+        const target = rows[0];
+        if (!target) throw validationError('USER_NOT_FOUND', 'No such user in this organisation');
+
+        if (target.authority_level === 'L3' && body.level !== 'L3') {
+          const remaining = await tx<{ count: string }[]>`
+            SELECT count(*)::text AS count FROM users
+             WHERE organization_id = ${actor.organizationId}
+               AND authority_level = 'L3' AND status = 'ACTIVE' AND id <> ${userId}
+          `;
+          if (Number(remaining[0]?.count ?? '0') === 0) {
+            throw validationError(
+              'LAST_EXECUTIVE_AUTHORITY',
+              'This is the last active executive authority. Promote another before demoting it, or nobody will be able to release a payment.',
+            );
+          }
+        }
+
+        /*
+         * users_privileged_requires_pin is a CHECK constraint: an ACTIVE L2 or L3 must have
+         * a PIN. Promoting an L1 who has none would violate it, so the account drops to
+         * PENDING_ENROLMENT and becomes usable once it has a key and a PIN. Letting the
+         * database reject the update instead would surface as an opaque constraint error.
+         */
+        const needsEnrolment = body.level !== 'L1' && target.pin === null;
+        const status = needsEnrolment ? 'PENDING_ENROLMENT' : target.status;
+
+        await tx`
+          UPDATE users SET authority_level = ${body.level}, status = ${status}
+           WHERE id = ${userId}
+        `;
+
+        // Authority changed: existing sessions carry the old level in their capabilities.
+        await tx`UPDATE sessions SET revoked_at = now() WHERE user_id = ${userId} AND revoked_at IS NULL`;
+
+        await writeAuditEvent(tx, {
+          organizationId: actor.organizationId,
+          actorId: actor.userId,
+          actorLevel: actor.level,
+          eventClass: 'IDENTITY',
+          action: 'admin.user.level_changed',
+          objectType: 'User',
+          objectId: userId,
+          outcome: 'SUCCESS',
+          previousState: { level: target.authority_level, status: target.status },
+          newState: { level: body.level, status },
+          correlationId,
+          securityContext: c.get('securityContext'),
+          detail: { requiresEnrolment: needsEnrolment },
+        });
+
+        return { level: body.level, status };
+      }),
+    );
+
+    return c.json(result);
+  },
+);
+
+/** POST /admin/users/:id/enrolment-token — let a member register their first key. */
+adminRoutes.post(
+  '/users/:id/enrolment-token',
+  requireExactLevel('L3'),
+  requirePermissions('admin:users'),
+  async (c) => {
+    const actor = actorOf(c);
+    const userId = c.req.param('id');
+    const correlationId = c.get('correlationId');
+
+    assertFreshAuthentication(actor);
+    assertWebAuthnSession(actor);
+
+    const issued = await withConnection(c.env, (sql) =>
+      inTransaction(sql, async (tx) => {
+        const rows = await tx<{ id: string; email: string }[]>`
+          SELECT id, email FROM users
+           WHERE id = ${userId} AND organization_id = ${actor.organizationId} LIMIT 1
+        `;
+        const target = rows[0];
+        if (!target) throw validationError('USER_NOT_FOUND', 'No such user in this organisation');
+
+        const existing = await tx<{ id: string }[]>`
+          SELECT id FROM webauthn_credentials
+           WHERE user_id = ${userId} AND status = 'ACTIVE' LIMIT 1
+        `;
+        if (existing.length > 0) {
+          throw validationError(
+            'ALREADY_ENROLLED',
+            'That account already has an authenticator. Enrolment tokens only register the first one.',
+          );
+        }
+
+        const token = randomToken(32);
+
+        // One live token per user, so a token glimpsed over a shoulder and one issued later
+        // cannot both work.
+        await tx`DELETE FROM enrolment_tokens WHERE user_id = ${userId} AND consumed_at IS NULL`;
+        await tx`
+          INSERT INTO enrolment_tokens (organization_id, user_id, token_hash, expires_at)
+          VALUES (${actor.organizationId}, ${userId}, ${await sha256Hex(token)},
+                  now() + interval '30 minutes')
+        `;
+
+        await writeAuditEvent(tx, {
+          organizationId: actor.organizationId,
+          actorId: actor.userId,
+          actorLevel: actor.level,
+          eventClass: 'IDENTITY',
+          action: 'admin.user.enrolment_token_issued',
+          objectType: 'User',
+          objectId: userId,
+          outcome: 'SUCCESS',
+          correlationId,
+          securityContext: c.get('securityContext'),
+          detail: { email: target.email },
+        });
+
+        return { token, expiresAt: new Date(Date.now() + 30 * 60_000).toISOString() };
+      }),
+    );
+
+    return c.json(issued, 201);
   },
 );

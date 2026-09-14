@@ -160,6 +160,119 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   return payload as T;
 }
 
+/**
+ * Daraja credentials as the API returns them: identifiers in the clear, secrets masked.
+ *
+ * The API never sends a consumer secret or security credential back, at any authority
+ * level — only the last four of the consumer key, which is a public identifier and exists
+ * so an administrator can tell two keys apart mid-rotation.
+ */
+export interface DarajaConfigurationView {
+  id: string;
+  environment: 'sandbox' | 'production';
+  shortCode: string;
+  initiatorName: string;
+  commandId: string;
+  consumerKeyMasked: string;
+  consumerSecretMasked: string;
+  securityCredentialMasked: string;
+  credentialVersion: number;
+  credentialRotatedAt: string | null;
+  resultUrl: string | null;
+  queueTimeoutUrl: string | null;
+  status: string;
+  lastTestAt: string | null;
+  lastTestOk: boolean | null;
+  lastTestMessage: string | null;
+}
+
+/** The organisation's policy limits, as stored. Amounts are cents. */
+export interface OrganizationPolicyView {
+  maxInstructionAmountCents: number;
+  maxBatchTotalCents: number;
+  maxBatchInstructions: number;
+  highValueThresholdCents: number;
+  coolingOffSeconds: number;
+  blockingRiskBand: 'NEVER' | 'HIGH' | 'CRITICAL';
+  allowL1FailedExport: boolean;
+  maxExportRows: number;
+  dailyDisbursementCeilingCents: number;
+}
+
+/** One row of the append-only audit trail. */
+export interface AuditEventView {
+  event_reference: string;
+  sequence: string;
+  actor_id: string | null;
+  actor_level: string | null;
+  event_class: string;
+  action: string;
+  object_type: string | null;
+  object_id: string | null;
+  outcome: string;
+  /** The API selects occurred_at; there is no created_at on this projection. */
+  occurred_at: string;
+  correlation_id?: string;
+  detail?: Record<string, unknown> | null;
+}
+
+/** A member of the organisation, for the user-management screen. */
+export interface OrganizationUserView {
+  userId: string;
+  email: string;
+  fullName: string;
+  level: 'L1' | 'L2' | 'L3';
+  status: string;
+  createdAt: string;
+  hasAuthenticator: boolean;
+  hasAuthorizationPin: boolean;
+  lastLoginAt: string | null;
+}
+
+/**
+ * Upload a file as multipart/form-data.
+ *
+ * Separate from `request` because the body is a FormData, and setting Content-Type by hand
+ * would omit the multipart boundary the browser generates — the request would arrive
+ * unparseable and the API would report a missing file.
+ */
+async function upload<T>(path: string, file: File, field = 'file'): Promise<T> {
+  const form = new FormData();
+  form.append(field, file);
+
+  const response = await fetch(`${API_BASE}${path}`, {
+    method: 'POST',
+    headers: {
+      Accept: 'application/json',
+      'X-Solvaren-Device': deviceId(),
+      ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
+    },
+    body: form,
+    credentials: 'omit',
+  });
+
+  const text = await response.text();
+  let payload: unknown = null;
+  try {
+    payload = text ? JSON.parse(text) : null;
+  } catch {
+    payload = null;
+  }
+
+  if (!response.ok) {
+    const shape = (payload as { error?: ApiErrorShape } | null)?.error;
+    throw new ApiError(
+      response.status,
+      shape ?? {
+        code: 'UPLOAD_FAILED',
+        category: 'INTERNAL',
+        message: `The server returned ${response.status}.`,
+      },
+    );
+  }
+  return payload as T;
+}
+
 /** Download a generated file, preserving the server-supplied filename. */
 export async function downloadCsv(
   path: string,
@@ -569,6 +682,172 @@ export const api = {
       request(`/batches/${id}/approve`, { method: 'POST', body: { reason, acknowledgeFindings } }),
     reject: (id: string, reason: string) =>
       request(`/batches/${id}/reject`, { method: 'POST', body: { reason } }),
+    hold: (id: string, reason: string) =>
+      request(`/batches/${id}/hold`, { method: 'POST', body: { reason } }),
+
+    /*
+     * Batch preparation, the front half of the payment path.
+     *
+     * These four endpoints existed from the start and nothing in the console called them,
+     * so a batch could be reviewed, approved and released but never created. The empty
+     * state even told the operator to upload a CSV, with no control to do it.
+     */
+    create: (purpose: string, paymentPeriod?: string) =>
+      request<{ batchId: string; batchReference: string; state: string }>('/batches', {
+        method: 'POST',
+        body: { purpose, ...(paymentPeriod ? { paymentPeriod } : {}) },
+      }),
+
+    uploadCsv: (id: string, file: File) =>
+      upload<{
+        accepted: number;
+        /** Per-row rejections, using the parser's own field names (packages/core/src/csv.ts). */
+        rejected: { lineNumber: number; column: string; value: string; reason: string }[];
+        duplicateWarnings: {
+          msisdn: string;
+          amountCents: number;
+          lineNumbers: number[];
+          reason: string;
+        }[];
+        totalAmountCents: number;
+        state: string;
+      }>(`/batches/${id}/upload`, file),
+
+    validate: (id: string) =>
+      request<{
+        state: string;
+        risk: {
+          score: number;
+          band: 'LOW' | 'ELEVATED' | 'HIGH' | 'CRITICAL';
+          signals: RiskSignalView[];
+          requiresAcknowledgement: boolean;
+        };
+      }>(`/batches/${id}/validate`, { method: 'POST' }),
+
+    submit: (id: string) => request<{ state: string }>(`/batches/${id}/submit`, { method: 'POST' }),
+  },
+
+  /*
+   * The signed-in person's own security settings.
+   *
+   * The Authorization PIN is a separate credential from the password and is what the
+   * release ceremony asks for. Until this was reachable, an account created by
+   * scripts/create-user.mjs had no PIN and no way to set one, so an L3 could sign in and
+   * still never complete a release.
+   */
+  account: {
+    setAuthorizationPin: (currentPassword: string, pin: string) =>
+      request<{ updated: boolean }>('/auth/authorization-pin', {
+        method: 'POST',
+        body: { currentPassword, pin },
+      }),
+
+    generateRecoveryCodes: (currentPassword: string) =>
+      request<{ codes: string[] }>('/auth/recovery-codes', {
+        method: 'POST',
+        body: { currentPassword },
+      }),
+
+    registerKeyOptions: () =>
+      request<{
+        challenge: string;
+        user: { id: string; name: string; displayName: string };
+        rp?: { id?: string; name?: string };
+        excludeCredentials?: { id: string }[];
+      }>('/auth/webauthn/register/options', { method: 'POST' }),
+
+    registerKey: (response: unknown, friendlyName?: string) =>
+      request<{ registered: boolean; credentialId: string }>('/auth/webauthn/register', {
+        method: 'POST',
+        body: { response, friendlyName },
+      }),
+
+    signOutEverywhere: () => request<{ revoked: number }>('/auth/logout-all', { method: 'POST' }),
+  },
+
+  /*
+   * Organisation administration. Every endpoint here is L3-only and enforced server-side;
+   * the console hides the screens from lower levels purely to avoid showing controls that
+   * would be refused.
+   */
+  admin: {
+    daraja: {
+      list: () => request<{ configurations: DarajaConfigurationView[] }>('/admin/daraja'),
+
+      save: (config: {
+        environment: 'sandbox' | 'production';
+        shortCode: string;
+        initiatorName: string;
+        commandId: 'BusinessPayment' | 'SalaryPayment' | 'PromotionPayment';
+        consumerKey: string;
+        consumerSecret: string;
+        initiatorPasswordOrCredential: string;
+        mpesaCertificatePem?: string;
+      }) => request<{ configurationId: string }>('/admin/daraja', { method: 'POST', body: config }),
+
+      /** Proves the credentials authenticate, without moving money. */
+      test: (id: string) =>
+        request<{ ok: boolean; message: string; latencyMs?: number }>(`/admin/daraja/${id}/test`, {
+          method: 'POST',
+        }),
+
+      enable: (id: string) =>
+        request<{ status: string }>(`/admin/daraja/${id}/enable`, { method: 'POST' }),
+      disable: (id: string) =>
+        request<{ status: string }>(`/admin/daraja/${id}/disable`, { method: 'POST' }),
+    },
+
+    policies: {
+      get: () => request<{ policy: OrganizationPolicyView }>('/admin/policies'),
+      update: (patch: Partial<OrganizationPolicyView>) =>
+        request<{ policy: OrganizationPolicyView }>('/admin/policies', {
+          method: 'PATCH',
+          body: patch,
+        }),
+    },
+
+    audit: {
+      list: (params: URLSearchParams) =>
+        request<{ events: AuditEventView[] }>(`/admin/audit?${params.toString()}`),
+      /**
+       * Field names come from ChainVerification in packages/core/src/audit.ts.
+       * Reading a name the API does not send yields undefined, which is falsy — and a
+       * falsy "valid" reads as "your audit log has been tampered with". Getting this
+       * wrong raises an incident over nothing, so it is typed from the source.
+       */
+      verify: () =>
+        request<{
+          valid: boolean;
+          eventsVerified: number;
+          brokenAtIndex: number | null;
+          brokenEventId: string | null;
+          reason: string | null;
+          interpretation: string;
+        }>('/admin/audit/verify', { method: 'POST' }),
+    },
+
+    users: {
+      list: () => request<{ users: OrganizationUserView[] }>('/admin/users'),
+      create: (input: { email: string; fullName: string; level: 'L1' | 'L2' | 'L3' }) =>
+        request<{ userId: string; email: string; level: string; temporaryPassword: string }>(
+          '/admin/users',
+          { method: 'POST', body: input },
+        ),
+      setStatus: (id: string, status: 'ACTIVE' | 'DISABLED') =>
+        request<{ status: string }>(`/admin/users/${id}/status`, {
+          method: 'PATCH',
+          body: { status },
+        }),
+      setLevel: (id: string, level: 'L1' | 'L2' | 'L3') =>
+        request<{ level: string }>(`/admin/users/${id}/level`, {
+          method: 'PATCH',
+          body: { level },
+        }),
+      issueEnrolmentToken: (id: string) =>
+        request<{ token: string; expiresAt: string }>(`/admin/users/${id}/enrolment-token`, {
+          method: 'POST',
+        }),
+    },
   },
 
   authorization: {

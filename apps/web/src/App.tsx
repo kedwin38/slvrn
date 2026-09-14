@@ -18,9 +18,23 @@ import { Dashboard } from './pages/Dashboard.js';
 import { TransactionsExplorer } from './pages/TransactionsExplorer.js';
 import { BatchesPage } from './pages/Batches.js';
 import { BackupsPage } from './pages/Backups.js';
+import { UsersPage } from './pages/Users.js';
+import { DarajaCredentialsPage } from './pages/DarajaCredentials.js';
+import { AuditLogPage } from './pages/AuditLog.js';
+import { PolicySettingsPage } from './pages/PolicySettings.js';
+import { SecuritySettingsPage } from './pages/SecuritySettings.js';
 import { Notice } from './components/primitives.js';
 
-type Route = 'dashboard' | 'transactions' | 'batches' | 'backups';
+type Route =
+  | 'dashboard'
+  | 'transactions'
+  | 'batches'
+  | 'backups'
+  | 'members'
+  | 'daraja'
+  | 'policy'
+  | 'audit'
+  | 'security';
 
 interface NavEntry {
   route: Route;
@@ -28,7 +42,7 @@ interface NavEntry {
   icon: string;
   /** Rendered only when the actor holds this capability. */
   requires?: string;
-  group: 'Operations' | 'Administration';
+  group: 'Operations' | 'Administration' | 'Account';
 }
 
 const NAVIGATION: NavEntry[] = [
@@ -48,12 +62,42 @@ const NAVIGATION: NavEntry[] = [
     group: 'Operations',
   },
   {
+    route: 'members',
+    label: 'Members',
+    icon: '☰',
+    requires: 'admin:users',
+    group: 'Administration',
+  },
+  {
+    route: 'daraja',
+    label: 'M-PESA credentials',
+    icon: '⚿',
+    requires: 'admin:daraja',
+    group: 'Administration',
+  },
+  {
+    route: 'policy',
+    label: 'Policy',
+    icon: '⚖',
+    requires: 'admin:policies',
+    group: 'Administration',
+  },
+  {
+    route: 'audit',
+    label: 'Audit trail',
+    icon: '✇',
+    requires: 'audit:read_org',
+    group: 'Administration',
+  },
+  {
     route: 'backups',
     label: 'Backups',
     icon: '⛃',
     requires: 'admin:backups',
     group: 'Administration',
   },
+  // Everyone has their own credentials to manage, so this carries no capability gate.
+  { route: 'security', label: 'Security', icon: '⛨', group: 'Account' },
 ];
 
 export function App() {
@@ -106,7 +150,7 @@ export function App() {
   const visible = NAVIGATION.filter(
     (entry) => !entry.requires || capabilities[entry.requires as never],
   );
-  const groups = ['Operations', 'Administration'] as const;
+  const groups = ['Operations', 'Administration', 'Account'] as const;
 
   return (
     <div className="shell">
@@ -205,14 +249,27 @@ export function App() {
         )}
 
         {route === 'backups' && <BackupsPage />}
+        {route === 'members' && <UsersPage />}
+        {route === 'daraja' && <DarajaCredentialsPage />}
+        {route === 'policy' && <PolicySettingsPage />}
+        {route === 'audit' && <AuditLogPage />}
+        {route === 'security' && <SecuritySettingsPage session={session} />}
       </main>
     </div>
   );
 }
 
 function readRoute(): Route {
+  /*
+   * Derived from NAVIGATION rather than listed again.
+   *
+   * This was a second, hand-maintained copy of the route list, and it silently fell out of
+   * step the moment routes were added: the nav entry rendered, the hash changed, and this
+   * function did not recognise the value, so every new screen quietly showed the dashboard
+   * instead. A allowlist that has to be remembered is one that will eventually be forgotten.
+   */
   const hash = window.location.hash.replace(/^#\//, '');
-  const routes: Route[] = ['dashboard', 'transactions', 'batches', 'backups'];
+  const routes = NAVIGATION.map((entry) => entry.route);
   return routes.includes(hash as Route) ? (hash as Route) : 'dashboard';
 }
 

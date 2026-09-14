@@ -20,6 +20,8 @@ import {
   TableSkeleton,
 } from '../components/primitives.js';
 import { AuthorizationCeremony } from './AuthorizationCeremony.js';
+import { NewBatch } from './NewBatch.js';
+import { Modal } from '../components/primitives.js';
 
 interface Props {
   capabilities: Record<string, boolean>;
@@ -48,6 +50,7 @@ export function BatchesPage({ capabilities, onReleased, onViewTransactions }: Pr
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [ceremonyBatchId, setCeremonyBatchId] = useState<string | null>(null);
+  const [preparing, setPreparing] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -99,6 +102,16 @@ export function BatchesPage({ capabilities, onReleased, onViewTransactions }: Pr
           </select>
         </div>
         <div className="filter-actions">
+          {capabilities['batch:create'] && (
+            <button
+              className="button"
+              data-variant="primary"
+              onClick={() => setPreparing(true)}
+              disabled={loading}
+            >
+              New batch
+            </button>
+          )}
           <button className="button" onClick={load} disabled={loading}>
             Refresh
           </button>
@@ -116,7 +129,9 @@ export function BatchesPage({ capabilities, onReleased, onViewTransactions }: Pr
           <TableSkeleton rows={5} columns={5} />
         ) : batches.length === 0 ? (
           <EmptyState title="No batches in this state">
-            Payment Operations creates a batch by uploading a CSV of recipients and amounts.
+            {capabilities['batch:create']
+              ? 'Choose "New batch" to create one and upload a CSV of recipients and amounts.'
+              : 'Payment Operations creates a batch by uploading a CSV of recipients and amounts.'}
           </EmptyState>
         ) : (
           <div className="table-scroll">
@@ -219,6 +234,15 @@ export function BatchesPage({ capabilities, onReleased, onViewTransactions }: Pr
           </div>
         )}
       </div>
+
+      {preparing && (
+        <Modal open onClose={() => setPreparing(false)} labelledBy="new-batch-title">
+          <h2 id="new-batch-title" className="page-title">
+            New payment batch
+          </h2>
+          <NewBatch onClose={() => setPreparing(false)} onDone={() => void load()} />
+        </Modal>
+      )}
 
       {ceremonyBatchId && (
         <AuthorizationCeremony
