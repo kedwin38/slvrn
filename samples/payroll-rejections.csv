@@ -1,0 +1,12 @@
+Employee Name,Phone Number,Amount KES,Department,Employee ID,Remarks
+Asha Wanjiru Kamau,0712345678,85000,Engineering,EMP-0001,Valid row
+Brian Otieno Ochieng,254733112244,64500,Engineering,EMP-0002,Valid row
+,0745998877,50000,Finance,EMP-0003,Missing name
+Daniel Kiprop,0812345678,57000,Operations,EMP-0004,Not a Kenyan mobile prefix
+Esther Akinyi,0722ABC456,48000,Operations,EMP-0005,Letters in the phone number
+Francis Mutiso,0799001122,1500.75,Engineering,EMP-0006,Cents are not payable by B2C
+Grace Chepkemoi,0788445566,5,People & Culture,EMP-0007,Below the KES 10 minimum
+Hassan Abdi Noor,0700998877,400000,Finance,EMP-0008,Above the KES 250000 maximum
+Irene Wambui,0711556677,=SUM(B2:B9),Finance,EMP-0009,A formula rather than a value
+James Kariuki,0733889900,0,Operations,EMP-0010,Zero is not a payment
+Asha Wanjiru Kamau,0712345678,85000,Engineering,EMP-0001,Exact duplicate of line 2
