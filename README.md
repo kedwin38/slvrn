@@ -144,10 +144,12 @@ credentials and a shortcode. The `SecurityCredential` implementation _is_ verifi
 output is decrypted with OpenSSL, including keys parsed from a genuine X.509 certificate —
 but "Daraja accepts our B2C payload" is an untested claim until someone runs it.
 
-**Not deployed.** The server builds, boots, serves, and shuts down cleanly — that much was
-run. The container images have _not_ been built, because this environment has no Docker
-daemon, so `apps/api/Dockerfile` and `apps/web/Dockerfile` are unverified. No Railway
-project has been created.
+**Not run against a real deployment.** The server builds, boots, serves and shuts down
+cleanly, and CI builds both container images — so the Dockerfiles are verified to the
+extent that they produce images. What has _not_ happened is a running deployment observed
+end to end: no payment has been released against a live database behind a real domain, and
+no backup has been taken to a real bucket. The gap between "the image builds" and "the
+system works in production" is exactly the gap the deployment checklist exists to close.
 
 **There is no edge any more.** The Cloudflare build inherited a WAF, managed DDoS
 protection and edge rate limiting. Railway provides none of that, and the controls that
