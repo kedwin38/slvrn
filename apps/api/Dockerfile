@@ -76,6 +76,10 @@ COPY scripts/migrate.mjs ./scripts/migrate.mjs
 # healthcheck can see, because the browser blocks those requests before they are sent.
 COPY scripts/deploy-check.mjs ./scripts/deploy-check.mjs
 
+# Railway runs preDeployCommand without a shell, so the sequence is a script rather than a
+# chain of && — which silently ran only the first command.
+COPY scripts/predeploy.mjs ./scripts/predeploy.mjs
+
 # Only ever runs when SEED_DEMO_ACCOUNTS=true, and refuses outright when
 # ENVIRONMENT=production unless explicitly overridden. See the script's own header.
 COPY scripts/seed-demo.mjs ./scripts/seed-demo.mjs

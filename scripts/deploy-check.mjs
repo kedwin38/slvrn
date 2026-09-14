@@ -17,13 +17,11 @@
  *   node scripts/deploy-check.mjs --strict            # exit non-zero on failure (CI)
  *   node scripts/deploy-check.mjs --demo              # also exercise a real sign-in
  *
- * It is wired as a pre-deploy command, where it runs against the deployment that is still
- * live. It exits 0 there even when a check fails: a smoke test that can block every future
+ * scripts/predeploy.mjs runs it as part of the pre-deploy step, against the deployment that
+ * is still live. It exits 0 there even when a check fails: a smoke test that can block every future
  * deploy is a smoke test that gets deleted the first time it is wrong. Pass --strict when
  * you want the exit code to mean something.
  */
-
-import { spawn } from 'node:child_process';
 
 const strict = process.argv.includes('--strict');
 const demo = process.argv.includes('--demo') || process.env.CHECK_DEMO_LOGIN === 'true';
@@ -47,25 +45,6 @@ async function fetchWithTimeout(url, options = {}, ms = 15_000) {
   }
 }
 
-/** Run the demo seed as a child process, so its own production guard still applies. */
-async function seedDemoAccounts() {
-  console.log('');
-  console.log('Seeding demo accounts (SEED_DEMO_ACCOUNTS=true)');
-  await new Promise((resolve) => {
-    const child = spawn(process.execPath, ['scripts/seed-demo.mjs'], { stdio: 'inherit' });
-    child.on('close', (code) => {
-      if (code !== 0) {
-        console.log(`  seed-demo exited ${code} — see its output above for the reason.`);
-      }
-      resolve();
-    });
-    child.on('error', (error) => {
-      console.log(`  could not run seed-demo: ${error.message}`);
-      resolve();
-    });
-  });
-}
-
 async function main() {
   console.log('');
   console.log('SOLVAREN deployment check');
@@ -73,8 +52,6 @@ async function main() {
   console.log(`  API      ${apiBase || '(API_BASE_URL not set)'}`);
   console.log(`  Console  ${appOrigin || '(APP_ORIGIN not set)'}`);
   console.log('');
-
-  if (process.env.SEED_DEMO_ACCOUNTS === 'true') await seedDemoAccounts();
 
   console.log('');
   if (!apiBase) {
