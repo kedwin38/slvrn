@@ -505,6 +505,15 @@ dashboardRoutes.get('/action-queue', async (c) => {
     }[] = [];
 
     /*
+     * The driver hands back a Date for a timestamptz, not the ISO string the row type
+     * claims. Sorting them as strings threw, which took the whole action queue down with a
+     * 500 the moment two items shared a severity — so every timestamp is normalised here,
+     * once, rather than trusted at each use.
+     */
+    const iso = (value: unknown): string | null =>
+      value instanceof Date ? value.toISOString() : typeof value === 'string' ? value : null;
+
+    /*
      * Batch work, by the state that is waiting on this level. The three levels see three
      * different queues out of the same table, which is what separation of duties means in
      * practice.
@@ -539,7 +548,7 @@ dashboardRoutes.get('/action-queue', async (c) => {
         detail,
         count: Number(row.count),
         route,
-        oldestAt: row.oldest_at,
+        oldestAt: iso(row.oldest_at),
       });
     };
 
@@ -628,7 +637,7 @@ dashboardRoutes.get('/action-queue', async (c) => {
           detail: 'M-PESA has not confirmed whether these paid. They need investigation.',
           count,
           route: 'reconciliation',
-          oldestAt: cases[0]?.oldest_at ?? null,
+          oldestAt: iso(cases[0]?.oldest_at),
         });
       }
     }
@@ -650,7 +659,7 @@ dashboardRoutes.get('/action-queue', async (c) => {
           detail: 'Each has a provider code and a reason. Transient failures can be retried.',
           count,
           route: 'transactions',
-          oldestAt: failed[0]?.oldest_at ?? null,
+          oldestAt: iso(failed[0]?.oldest_at),
         });
       }
     }
@@ -671,7 +680,7 @@ dashboardRoutes.get('/action-queue', async (c) => {
           detail: 'Failed sign-ins, changed payment details, revoked devices and the like.',
           count,
           route: 'security-centre',
-          oldestAt: events[0]?.oldest_at ?? null,
+          oldestAt: iso(events[0]?.oldest_at),
         });
       }
 

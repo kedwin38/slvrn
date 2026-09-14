@@ -189,7 +189,12 @@ reconciliationRoutes.get('/summary', requirePermissions('reconciliation:read'), 
 
   const summary = await withConnection(c.env, async (sql) => {
     const rows = await sql<
-      { state: string; cases: string; oldest_opened_at: string | null; discrepancies: string }[]
+      {
+        state: string;
+        cases: string;
+        oldest_opened_at: Date | string | null;
+        discrepancies: string;
+      }[]
     >`
       SELECT state,
              count(*)::text AS cases,
@@ -209,11 +214,14 @@ reconciliationRoutes.get('/summary', requirePermissions('reconciliation:read'), 
       discrepancies += Number(row.discrepancies);
       if ((OPEN_STATES as readonly string[]).includes(row.state)) {
         outstanding += Number(row.cases);
-        if (
-          row.oldest_opened_at &&
-          (!oldestOutstandingAt || row.oldest_opened_at < oldestOutstandingAt)
-        ) {
-          oldestOutstandingAt = row.oldest_opened_at;
+        // The driver returns a Date for a timestamptz whatever the row type says, so this
+        // is normalised before it is compared or serialised.
+        const opened =
+          row.oldest_opened_at instanceof Date
+            ? row.oldest_opened_at.toISOString()
+            : (row.oldest_opened_at ?? null);
+        if (opened && (!oldestOutstandingAt || opened < oldestOutstandingAt)) {
+          oldestOutstandingAt = opened;
         }
       }
     }

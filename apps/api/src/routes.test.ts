@@ -1162,6 +1162,193 @@ suite('HTTP routes', () => {
       expect((await call('/reconciliation/cases/not-a-uuid', { level: 'L2' })).status).toBe(404);
     });
 
+    describe('resolving a real case', () => {
+      /** Seed a TIMEOUT transaction with an open case — the ambiguous state this exists for. */
+      async function openCase(reference: string) {
+        const recipients = await harness.sql<{ id: string }[]>`
+          INSERT INTO recipients (organization_id, full_name, msisdn)
+          VALUES (${ORG}, 'Recon Subject', ${'2547990002' + reference.slice(-2)})
+          ON CONFLICT (organization_id, msisdn) DO UPDATE SET full_name = EXCLUDED.full_name
+          RETURNING id
+        `;
+        const batches = await harness.sql<{ id: string }[]>`
+          INSERT INTO payment_batches (organization_id, batch_reference, purpose,
+                                       created_by_user_id, state)
+          VALUES (${ORG}, ${reference}, 'Reconciliation test', ${USERS.L1}, 'PROCESSING')
+          RETURNING id
+        `;
+        const instructions = await harness.sql<{ id: string }[]>`
+          INSERT INTO payment_instructions (organization_id, batch_id, recipient_id,
+                                            recipient_name_snapshot, msisdn_snapshot, amount_cents)
+          VALUES (${ORG}, ${batches[0]!.id}, ${recipients[0]!.id}, 'Recon Subject',
+                  ${'2547990002' + reference.slice(-2)}, 250000)
+          RETURNING id
+        `;
+        const transactions = await harness.sql<{ id: string }[]>`
+          INSERT INTO transactions (organization_id, instruction_id, batch_id, status,
+                                    originator_conversation_id, request_fingerprint, amount_cents,
+                                    failure_code, status_source)
+          VALUES (${ORG}, ${instructions[0]!.id}, ${batches[0]!.id}, 'TIMEOUT',
+                  ${'600992-' + reference}, ${'fp-' + reference}, 250000,
+                  'SLV_TIMEOUT', 'QUEUE_TIMEOUT')
+          RETURNING id
+        `;
+        const cases = await harness.sql<{ id: string }[]>`
+          INSERT INTO reconciliation_cases (organization_id, transaction_id, case_reference,
+                                            opened_reason)
+          VALUES (${ORG}, ${transactions[0]!.id}, ${'REC-' + reference},
+                  'No result was received from M-PESA within the expected window')
+          RETURNING id
+        `;
+        return { caseId: cases[0]!.id, transactionId: transactions[0]!.id };
+      }
+
+      it('lists the open case and counts it as outstanding', async () => {
+        const { caseId } = await openCase('SLV-REC-01');
+        const response = await call('/reconciliation/cases?outstanding=true', { level: 'L2' });
+        expect(response.status).toBe(200);
+        const body = (await response.json()) as {
+          cases: { caseId: string; transaction: { recipientName: string; amountCents: number } }[];
+        };
+        const found = body.cases.find((c) => c.caseId === caseId)!;
+        expect(found.transaction.recipientName).toBe('Recon Subject');
+        expect(found.transaction.amountCents).toBe(250000);
+
+        const summary = (await (await call('/reconciliation/summary', { level: 'L2' })).json()) as {
+          outstanding: number;
+        };
+        expect(summary.outstanding).toBeGreaterThan(0);
+      });
+
+      it('closing as MANUAL attaches the evidence and leaves the ledger untouched', async () => {
+        const { caseId, transactionId } = await openCase('SLV-REC-02');
+        const response = await call(`/reconciliation/cases/${caseId}/resolve`, {
+          level: 'L2',
+          method: 'POST',
+          body: {
+            outcome: 'MANUAL',
+            providerReceipt: 'SGX1234567',
+            note: 'The M-PESA portal shows this paid; Safaricom never delivered the callback.',
+          },
+        });
+        expect(response.status).toBe(200);
+        expect(((await response.json()) as { state: string }).state).toBe('RESOLVED_MANUAL');
+
+        // The operator is sure. The provider never confirmed. The ledger keeps saying so.
+        const txn = await harness.sql<{ status: string }[]>`
+          SELECT status FROM transactions WHERE id = ${transactionId}
+        `;
+        expect(txn[0]!.status).toBe('TIMEOUT');
+
+        const row = await harness.sql<{ evidence: { providerReceipt?: string }[] }[]>`
+          SELECT evidence FROM reconciliation_cases WHERE id = ${caseId}
+        `;
+        expect(row[0]!.evidence[0]!.providerReceipt).toBe('SGX1234567');
+      });
+
+      it('closing as FAILED writes the ledger, but only with a provider code', async () => {
+        const { caseId, transactionId } = await openCase('SLV-REC-03');
+
+        const noCode = await call(`/reconciliation/cases/${caseId}/resolve`, {
+          level: 'L2',
+          method: 'POST',
+          body: { outcome: 'FAILED', note: 'Safaricom support confirmed it never left' },
+        });
+        expect(noCode.status).toBe(422);
+
+        const response = await call(`/reconciliation/cases/${caseId}/resolve`, {
+          level: 'L2',
+          method: 'POST',
+          body: {
+            outcome: 'FAILED',
+            failureCode: '2040',
+            note: 'Safaricom support confirmed the recipient is not registered.',
+          },
+        });
+        expect(response.status).toBe(200);
+
+        const txn = await harness.sql<{ status: string; failure_code: string }[]>`
+          SELECT status, failure_code FROM transactions WHERE id = ${transactionId}
+        `;
+        expect(txn[0]!.status).toBe('FAILED');
+        expect(txn[0]!.failure_code).toBe('2040');
+      });
+
+      it('refuses to reopen a case that is already closed', async () => {
+        const { caseId } = await openCase('SLV-REC-04');
+        const body = {
+          outcome: 'MANUAL' as const,
+          note: 'Established from the provider portal and closed.',
+        };
+        expect(
+          (
+            await call(`/reconciliation/cases/${caseId}/resolve`, {
+              level: 'L2',
+              method: 'POST',
+              body,
+            })
+          ).status,
+        ).toBe(200);
+
+        const again = await call(`/reconciliation/cases/${caseId}/resolve`, {
+          level: 'L2',
+          method: 'POST',
+          body,
+        });
+        expect(again.status).toBe(422);
+        expect(((await again.json()) as { error: { code: string } }).error.code).toBe(
+          'RECONCILIATION_CASE_CLOSED',
+        );
+      });
+
+      it('refuses a re-query on a closed case, so a settled outcome cannot be reopened', async () => {
+        const { caseId } = await openCase('SLV-REC-05');
+        await call(`/reconciliation/cases/${caseId}/resolve`, {
+          level: 'L2',
+          method: 'POST',
+          body: { outcome: 'MANUAL', note: 'Closed after checking the provider portal.' },
+        });
+        const response = await call(`/reconciliation/cases/${caseId}/query`, {
+          level: 'L2',
+          method: 'POST',
+        });
+        expect(response.status).toBe(422);
+      });
+
+      it('queues a status query for an open case and marks it due now', async () => {
+        const { caseId, transactionId } = await openCase('SLV-REC-06');
+        const response = await call(`/reconciliation/cases/${caseId}/query`, {
+          level: 'L2',
+          method: 'POST',
+        });
+        expect(response.status).toBe(200);
+
+        const queued = await harness.sql<{ body: { transactionId?: string } }[]>`
+          SELECT body FROM job_queue WHERE queue = 'reconciliation'
+        `;
+        expect(queued.some((j) => j.body.transactionId === transactionId)).toBe(true);
+
+        // Due now, not at the end of the backoff the automatic attempts have accumulated.
+        const due = await harness.sql<{ due: boolean }[]>`
+          SELECT next_query_at <= now() AS due FROM reconciliation_cases WHERE id = ${caseId}
+        `;
+        expect(due[0]!.due).toBe(true);
+      });
+
+      it('shows the case detail with its transaction and activity trail', async () => {
+        const { caseId } = await openCase('SLV-REC-07');
+        const response = await call(`/reconciliation/cases/${caseId}`, { level: 'L2' });
+        expect(response.status).toBe(200);
+        const body = (await response.json()) as {
+          case: { caseReference: string; transaction: { batchReference: string } };
+          activity: unknown[];
+        };
+        expect(body.case.caseReference).toBe('REC-SLV-REC-07');
+        expect(body.case.transaction.batchReference).toBe('SLV-REC-07');
+        expect(Array.isArray(body.activity)).toBe(true);
+      });
+    });
+
     it('offers no route to declaring a payment successful', async () => {
       const response = await call(
         '/reconciliation/cases/00000000-0000-0000-0000-0000000000aa/resolve',
