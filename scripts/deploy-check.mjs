@@ -222,6 +222,8 @@ async function main() {
         // §11 recovery: the codes were write-only and there was no reset at all.
         ['Use a recovery code', 'credential recovery'],
         ['Reset access', 'administrative recovery'],
+        // Without this, every step-up-protected action is a dead end.
+        ['Confirm it is you', 'step-up confirmation'],
       ]) {
         record(all.includes(needle), `the console ships the ${label} screen`, needle);
       }

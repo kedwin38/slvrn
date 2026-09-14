@@ -320,7 +320,7 @@ function asApiError(err: unknown): ApiError {
   });
 }
 
-async function requestAssertion(challengeBase64Url: string): Promise<unknown> {
+export async function requestAssertion(challengeBase64Url: string): Promise<unknown> {
   if (!window.PublicKeyCredential) {
     throw new Error('This browser does not support the required verification method.');
   }

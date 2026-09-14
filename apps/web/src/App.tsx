@@ -29,6 +29,7 @@ import { SecurityCentrePage } from './pages/SecurityCentre.js';
 import { ReportsPage } from './pages/Reports.js';
 import { IntelligencePage } from './pages/Intelligence.js';
 import { ActionQueue } from './components/ActionQueue.js';
+import { StepUpGate } from './components/StepUp.js';
 import { Notice } from './components/primitives.js';
 
 type Route =
@@ -251,6 +252,9 @@ export function App() {
           </button>
         </div>
       </nav>
+
+      {/* Rendered once, above every route: any protected action can raise it. */}
+      <StepUpGate />
 
       <main className="main" id="main-content" tabIndex={-1}>
         {banner && (

@@ -1186,3 +1186,244 @@ authRoutes.post('/recovery/complete', async (c) => {
       'Your password has been changed and every session on this account has been signed out. Sign in with the new password.',
   });
 });
+
+// ---------------------------------------------------------------------------
+// Step-up authentication (spec §8.2, §9)
+// ---------------------------------------------------------------------------
+
+/**
+ * Re-confirm identity for a privileged action.
+ *
+ * Nine administrative operations and the payment release ceremony all call
+ * `assertFreshAuthentication`, which refuses anything attempted more than five minutes
+ * after sign-in — and there was no way anywhere to satisfy it. The error told the operator
+ * to "confirm your identity again" and offered no means of doing so, so every one of those
+ * actions became permanently unreachable a few minutes into a session. Saving M-PESA
+ * credentials was impossible in practice: nobody pastes a certificate and six other fields
+ * inside five minutes. Releasing a payment was impossible on the same terms.
+ *
+ * The chain here is the one spec §9 sets out for a credential change — re-authentication,
+ * then WebAuthn — and it is deliberately the same shape as signing in, because it is the
+ * same question being asked again. An L1 re-confirms with a password; anyone who holds an
+ * authenticator must use it, so a stolen session with a known password cannot step itself
+ * up to administrative authority.
+ *
+ * Only the *current* session is refreshed. Stepping up on one device must not quietly
+ * elevate another device's session that happens to belong to the same person.
+ */
+
+authRoutes.post('/step-up', requireAuth, async (c) => {
+  const actor = actorOf(c);
+  const body = z.object({ password: z.string().min(1).max(1024) }).parse(await c.req.json());
+  const correlationId = c.get('correlationId');
+  const security = c.get('securityContext');
+
+  const result = await withConnection(c.env, async (sql) => {
+    const users = await sql<{ password_hash: string; authority_level: string }[]>`
+      SELECT password_hash, authority_level FROM users WHERE id = ${actor.userId} LIMIT 1
+    `;
+    const user = users[0];
+    if (!user || !(await verifyPassword(body.password, user.password_hash))) {
+      await sql`
+        INSERT INTO security_events (organization_id, user_id, event_type, severity, description, ip, detail)
+        VALUES (${actor.organizationId}, ${actor.userId}, 'STEP_UP_FAILED', 'WARNING',
+                ${'A step-up authentication attempt failed on the password'},
+                ${security.ip}, ${sql.json({ level: actor.level })})
+      `;
+      throw authenticationError('PASSWORD_INCORRECT', 'That password was not correct');
+    }
+
+    const credentials = await sql<{ credential_id: string; transports: string[] }[]>`
+      SELECT credential_id, transports FROM webauthn_credentials
+       WHERE user_id = ${actor.userId} AND status = 'ACTIVE'
+    `;
+
+    /*
+     * Anyone with an authenticator must present it, not merely those whose level demands
+     * one. Downgrading to password-only for a privileged action because the *level* happens
+     * to be L1 would make step-up weaker than the sign-in that preceded it.
+     */
+    if (credentials.length > 0) {
+      const options = await generateAuthenticationOptions({
+        rpID: c.env.WEBAUTHN_RP_ID,
+        userVerification: 'required',
+        allowCredentials: credentials.map((cred) => ({
+          id: cred.credential_id,
+          transports: cred.transports as AuthenticatorTransportFuture[],
+        })),
+      });
+
+      const ticket = randomToken(32);
+      await sql`
+        INSERT INTO security_events (organization_id, user_id, event_type, severity, description, ip, detail)
+        VALUES (${actor.organizationId}, ${actor.userId}, 'STEP_UP_CHALLENGE_ISSUED', 'INFO',
+                ${'A WebAuthn challenge was issued to re-confirm identity'}, ${security.ip},
+                ${sql.json({ challenge: options.challenge, ticket, sessionId: actor.sessionId })})
+      `;
+
+      return { stage: 'WEBAUTHN_REQUIRED' as const, ticket, options };
+    }
+
+    // No authenticator enrolled: the password is the only credential this account has, and
+    // it has just been re-presented.
+    await sql`
+      UPDATE sessions SET authenticated_at = now() WHERE id = ${actor.sessionId}
+    `;
+    await inTransaction(sql, (tx) =>
+      writeAuditEvent(tx, {
+        organizationId: actor.organizationId,
+        actorId: actor.userId,
+        actorLevel: actor.level,
+        eventClass: 'IDENTITY',
+        action: 'auth.step_up',
+        objectType: 'Session',
+        objectId: actor.sessionId,
+        outcome: 'SUCCESS',
+        correlationId,
+        securityContext: security,
+        detail: { method: 'password' },
+      }),
+    );
+
+    return { stage: 'CONFIRMED' as const };
+  });
+
+  return c.json(result);
+});
+
+authRoutes.post('/step-up/verify', requireAuth, async (c) => {
+  const actor = actorOf(c);
+  const body = z
+    .object({ ticket: z.string().min(16).max(64), response: z.record(z.unknown()) })
+    .parse(await c.req.json());
+  const correlationId = c.get('correlationId');
+  const security = c.get('securityContext');
+
+  await withConnection(c.env, async (sql) => {
+    const events = await sql<{ detail: { challenge: string; sessionId: string } }[]>`
+      SELECT detail FROM security_events
+       WHERE event_type = 'STEP_UP_CHALLENGE_ISSUED'
+         AND detail->>'ticket' = ${body.ticket}
+         AND user_id = ${actor.userId}
+         AND created_at > now() - interval '5 minutes'
+       ORDER BY created_at DESC
+       LIMIT 1
+    `;
+    const pending = events[0];
+    if (!pending) {
+      throw authenticationError(
+        'STEP_UP_CHALLENGE_EXPIRED',
+        'That confirmation expired. Try the action again.',
+      );
+    }
+
+    // The challenge is bound to the session it was issued for: a ticket obtained on one
+    // device must not elevate another.
+    if (pending.detail.sessionId !== actor.sessionId) {
+      throw authenticationError(
+        'STEP_UP_CHALLENGE_EXPIRED',
+        'That confirmation belongs to a different session.',
+      );
+    }
+
+    const response = body.response as Record<string, unknown> & { id?: string };
+    const credentialId = typeof response.id === 'string' ? response.id : '';
+    const credentials = await sql<
+      {
+        id: string;
+        credential_id: string;
+        public_key: Uint8Array;
+        signature_counter: string;
+        transports: string[];
+      }[]
+    >`
+      SELECT id, credential_id, public_key, signature_counter, transports
+        FROM webauthn_credentials
+       WHERE user_id = ${actor.userId} AND credential_id = ${credentialId} AND status = 'ACTIVE'
+       LIMIT 1
+    `;
+    const credential = credentials[0];
+    if (!credential) {
+      throw authenticationError(
+        'WEBAUTHN_CREDENTIAL_UNKNOWN',
+        'That authenticator is not registered to this account',
+      );
+    }
+
+    let verification;
+    try {
+      verification = await verifyAuthenticationResponse({
+        response: body.response as never,
+        expectedChallenge: pending.detail.challenge,
+        expectedOrigin: c.env.APP_ORIGIN,
+        expectedRPID: c.env.WEBAUTHN_RP_ID,
+        requireUserVerification: true,
+        credential: {
+          id: credential.credential_id,
+          publicKey: new Uint8Array(credential.public_key),
+          counter: Number(credential.signature_counter),
+          transports: credential.transports as AuthenticatorTransportFuture[],
+        },
+      });
+    } catch {
+      throw authenticationError(
+        'WEBAUTHN_VERIFICATION_FAILED',
+        'The security key verification failed',
+      );
+    }
+    if (!verification.verified) {
+      throw authenticationError(
+        'WEBAUTHN_VERIFICATION_FAILED',
+        'The security key verification failed',
+      );
+    }
+
+    const newCounter = verification.authenticationInfo.newCounter;
+    const storedCounter = Number(credential.signature_counter);
+    if (newCounter !== 0 && newCounter <= storedCounter) {
+      await sql`
+        INSERT INTO security_events (organization_id, user_id, event_type, severity, description, ip, detail)
+        VALUES (${actor.organizationId}, ${actor.userId}, 'WEBAUTHN_COUNTER_REGRESSION', 'CRITICAL',
+                ${'An authenticator signature counter did not advance during step-up, which can indicate a cloned key'},
+                ${security.ip}, ${sql.json({ storedCounter, newCounter })})
+      `;
+      throw authenticationError(
+        'WEBAUTHN_COUNTER_REGRESSION',
+        'That authenticator failed a security check. Contact your administrator.',
+      );
+    }
+
+    await sql`
+      UPDATE webauthn_credentials
+         SET signature_counter = ${newCounter}, last_used_at = now()
+       WHERE id = ${credential.id}
+    `;
+    await sql`
+      UPDATE sessions SET authenticated_at = now(), webauthn_verified_at = now()
+       WHERE id = ${actor.sessionId}
+    `;
+    // Spent, so a captured ticket cannot be replayed into a second elevation.
+    await sql`
+      UPDATE security_events SET detail = detail - 'ticket'
+       WHERE event_type = 'STEP_UP_CHALLENGE_ISSUED' AND detail->>'ticket' = ${body.ticket}
+    `;
+
+    await inTransaction(sql, (tx) =>
+      writeAuditEvent(tx, {
+        organizationId: actor.organizationId,
+        actorId: actor.userId,
+        actorLevel: actor.level,
+        eventClass: 'IDENTITY',
+        action: 'auth.step_up',
+        objectType: 'Session',
+        objectId: actor.sessionId,
+        outcome: 'SUCCESS',
+        correlationId,
+        securityContext: security,
+        detail: { method: 'webauthn' },
+      }),
+    );
+  });
+
+  return c.json({ stage: 'CONFIRMED' as const });
+});

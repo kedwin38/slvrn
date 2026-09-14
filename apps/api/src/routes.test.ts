@@ -23,6 +23,7 @@ import {
   hashSessionToken,
 } from './services/crypto.js';
 import type { AuthorityLevel } from '@solvaren/core';
+import { textArrayValue } from './db/client.js';
 
 const DATABASE_AVAILABLE = Boolean(process.env.SOLVAREN_TEST_DATABASE_URL);
 const suite = DATABASE_AVAILABLE ? describe : describe.skip;
@@ -1670,6 +1671,185 @@ suite('HTTP routes', () => {
   // could redeem one; there was no password reset for anybody, self-service or
   // administrative. A user who forgot their password was locked out permanently.
   // =========================================================================
+
+  // =========================================================================
+  // Step-up authentication (§8.2, §9)
+  //
+  // Nine administrative actions and the release ceremony refuse anything attempted more
+  // than five minutes after sign-in, and nothing anywhere could satisfy that. Saving M-PESA
+  // credentials was impossible in practice, so a real deployment could never be configured
+  // to pay anybody.
+  // =========================================================================
+
+  describe('step-up authentication', () => {
+    /** Age the session past the five-minute window, as ordinary use does within minutes. */
+    async function staleSession(level: AuthorityLevel) {
+      await harness.sql`
+        UPDATE sessions SET authenticated_at = now() - interval '30 minutes'
+         WHERE user_id = ${USERS[level]} AND revoked_at IS NULL
+      `;
+    }
+
+    async function freshSession(level: AuthorityLevel) {
+      await harness.sql`
+        UPDATE sessions SET authenticated_at = now()
+         WHERE user_id = ${USERS[level]} AND revoked_at IS NULL
+      `;
+    }
+
+    afterAll(async () => {
+      for (const level of ['L1', 'L2', 'L3'] as AuthorityLevel[]) await freshSession(level);
+    });
+
+    it('refuses a privileged action once the session is no longer fresh', async () => {
+      await staleSession('L3');
+      const response = await call('/admin/daraja', {
+        level: 'L3',
+        method: 'POST',
+        body: {
+          environment: 'sandbox',
+          shortCode: '600992',
+          initiatorName: 'testapi',
+          consumerKey: 'consumer-key-value',
+          consumerSecret: 'consumer-secret-value',
+          initiatorPasswordOrCredential: 'Safaricom2026pay',
+        },
+      });
+      expect(response.status).toBe(401);
+      expect(((await response.json()) as { error: { code: string } }).error.code).toBe(
+        'STEP_UP_REQUIRED',
+      );
+    });
+
+    it('refuses to step up on a wrong password, and records the attempt', async () => {
+      const response = await call('/auth/step-up', {
+        level: 'L3',
+        method: 'POST',
+        body: { password: 'not the right password at all' },
+      });
+      expect(response.status).toBe(401);
+
+      const events = await harness.sql<{ severity: string }[]>`
+        SELECT severity FROM security_events WHERE event_type = 'STEP_UP_FAILED'
+         AND user_id = ${USERS.L3}
+      `;
+      expect(events.length).toBeGreaterThan(0);
+    });
+
+    it('confirms with a password when the account has no authenticator', async () => {
+      // The L1 fixture has no WebAuthn credential, so the password is its only credential
+      // and re-presenting it is the whole of step-up.
+      await staleSession('L1');
+      const response = await call('/auth/step-up', {
+        level: 'L1',
+        method: 'POST',
+        body: { password: 'correct horse battery staple' },
+      });
+      expect(response.status).toBe(200);
+      expect(((await response.json()) as { stage: string }).stage).toBe('CONFIRMED');
+
+      const rows = await harness.sql<{ fresh: boolean }[]>`
+        SELECT authenticated_at > now() - interval '1 minute' AS fresh FROM sessions
+         WHERE user_id = ${USERS.L1} AND revoked_at IS NULL LIMIT 1
+      `;
+      expect(rows[0]!.fresh).toBe(true);
+    });
+
+    it('demands the authenticator from anyone who has one', async () => {
+      // Seeded so this account holds a credential; a password alone must not elevate it.
+      await harness.sql`
+        INSERT INTO webauthn_credentials (organization_id, user_id, credential_id, public_key,
+                                          signature_counter, transports, status)
+        VALUES (${ORG}, ${USERS.L3}, 'step-up-credential-1', ${Buffer.from([1, 2, 3])},
+                0, ${textArrayValue(harness.sql, ['internal'])}, 'ACTIVE')
+        ON CONFLICT DO NOTHING
+      `;
+
+      const response = await call('/auth/step-up', {
+        level: 'L3',
+        method: 'POST',
+        body: { password: 'correct horse battery staple' },
+      });
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as { stage: string; ticket?: string };
+      // Not CONFIRMED: the password alone is not enough for an account with a key.
+      expect(body.stage).toBe('WEBAUTHN_REQUIRED');
+      expect(body.ticket).toBeDefined();
+
+      // And the session is still stale until the assertion lands.
+      const rows = await harness.sql<{ stale: boolean }[]>`
+        SELECT authenticated_at < now() - interval '5 minutes' AS stale FROM sessions
+         WHERE user_id = ${USERS.L3} AND revoked_at IS NULL LIMIT 1
+      `;
+      expect(rows[0]!.stale).toBe(true);
+    });
+
+    it('refuses a step-up ticket issued for a different session', async () => {
+      const started = (await (
+        await call('/auth/step-up', {
+          level: 'L3',
+          method: 'POST',
+          body: { password: 'correct horse battery staple' },
+        })
+      ).json()) as { ticket: string };
+
+      // Re-point the stored challenge at another session, as a captured ticket replayed
+      // from a second device would be.
+      await harness.sql`
+        UPDATE security_events
+           SET detail = jsonb_set(detail, '{sessionId}', '"00000000-0000-0000-0000-0000000000ff"')
+         WHERE event_type = 'STEP_UP_CHALLENGE_ISSUED' AND detail->>'ticket' = ${started.ticket}
+      `;
+
+      const response = await call('/auth/step-up/verify', {
+        level: 'L3',
+        method: 'POST',
+        body: { ticket: started.ticket, response: { id: 'step-up-credential-1' } },
+      });
+      expect(response.status).toBe(401);
+      expect(((await response.json()) as { error: { code: string } }).error.code).toBe(
+        'STEP_UP_CHALLENGE_EXPIRED',
+      );
+    });
+
+    it('refuses an unknown ticket', async () => {
+      const response = await call('/auth/step-up/verify', {
+        level: 'L3',
+        method: 'POST',
+        body: { ticket: 'A'.repeat(32), response: { id: 'step-up-credential-1' } },
+      });
+      expect(response.status).toBe(401);
+    });
+
+    it('lets the privileged action through once the session is fresh again', async () => {
+      // The end the whole flow exists for: after confirming, the action that was refused
+      // succeeds. Simulated here at the session level, which is exactly what verify does.
+      await freshSession('L3');
+      const response = await call('/admin/daraja', {
+        level: 'L3',
+        method: 'POST',
+        body: {
+          environment: 'sandbox',
+          shortCode: '600992',
+          initiatorName: 'testapi',
+          consumerKey: 'consumer-key-value',
+          consumerSecret: 'consumer-secret-value',
+          initiatorPasswordOrCredential: 'Safaricom2026pay',
+        },
+      });
+      // No longer STEP_UP_REQUIRED — it now fails only for want of a certificate.
+      expect(response.status).not.toBe(401);
+      expect(((await response.json()) as { error: { code: string } }).error.code).toBe(
+        'DARAJA_CERTIFICATE_REQUIRED',
+      );
+    });
+
+    it('requires a session at all', async () => {
+      expect(
+        (await call('/auth/step-up', { method: 'POST', body: { password: 'x' } })).status,
+      ).toBe(401);
+    });
+  });
 
   describe('credential recovery', () => {
     /*

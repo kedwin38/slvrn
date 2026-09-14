@@ -97,6 +97,27 @@ interface RequestOptions {
   /** Required on mutating payment endpoints. */
   idempotencyKey?: string;
   signal?: AbortSignal;
+  /** Set on the internal replay after a step-up, so a persistent refusal cannot loop. */
+  retried?: boolean;
+}
+
+/**
+ * The console's response to `STEP_UP_REQUIRED`.
+ *
+ * Nine administrative actions and the release ceremony refuse anything attempted more than
+ * five minutes after sign-in, and until now the refusal was a dead end: the message asked
+ * the operator to confirm their identity again and nothing anywhere could. Saving M-PESA
+ * credentials was impossible in practice — nobody pastes a certificate and six other fields
+ * inside five minutes — and so was releasing a payment.
+ *
+ * Handled here rather than at each call site so that every protected action gets it, now
+ * and in future, without each one remembering to.
+ */
+type StepUpHandler = () => Promise<boolean>;
+let stepUpHandler: StepUpHandler | null = null;
+
+export function setStepUpHandler(handler: StepUpHandler | null): void {
+  stepUpHandler = handler;
 }
 
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
@@ -131,6 +152,22 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
 
   if (!response.ok) {
     const shape = (payload as { error?: ApiErrorShape } | null)?.error;
+
+    /*
+     * Re-confirm and replay the original request once. `options.retried` stops a loop if the
+     * server still refuses — better one clear error than an endless prompt. The step-up
+     * endpoints themselves are excluded, or a failure inside the prompt would re-enter it.
+     */
+    if (
+      shape?.code === 'STEP_UP_REQUIRED' &&
+      stepUpHandler &&
+      !options.retried &&
+      !path.startsWith('/auth/step-up')
+    ) {
+      const confirmed = await stepUpHandler();
+      if (confirmed) return request<T>(path, { ...options, retried: true });
+    }
+
     throw new ApiError(
       response.status,
       shape ?? {
@@ -914,6 +951,23 @@ export const api = {
    * hold, or an executive vouching for you. A ticket authorises one act — setting a new
    * password — and is never a session.
    */
+  stepUp: {
+    start: (password: string) =>
+      request<
+        | { stage: 'CONFIRMED' }
+        | {
+            stage: 'WEBAUTHN_REQUIRED';
+            ticket: string;
+            options: PublicKeyCredentialRequestOptionsJSON;
+          }
+      >('/auth/step-up', { method: 'POST', body: { password } }),
+    verify: (ticket: string, response: unknown) =>
+      request<{ stage: 'CONFIRMED' }>('/auth/step-up/verify', {
+        method: 'POST',
+        body: { ticket, response },
+      }),
+  },
+
   recovery: {
     start: (email: string, code: string) =>
       request<{
