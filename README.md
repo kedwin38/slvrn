@@ -114,6 +114,33 @@ rediscover it.
 
 ---
 
+## Demo accounts
+
+There is no self-service signup and nothing is seeded by default. For a look around without
+running the bootstrap script and capturing a one-time passphrase:
+
+```bash
+pnpm seed:demo        # or: node scripts/seed-demo.mjs
+```
+
+| Level | Email              | Password                  | PIN      | Signs in?                             |
+| ----- | ------------------ | ------------------------- | -------- | ------------------------------------- |
+| L1    | `l1@demo.solvaren` | `demo-L1-operations-2026` | —        | **Yes**, password alone               |
+| L2    | `l2@demo.solvaren` | `demo-L2-controller-2026` | `246813` | Only after a security key is enrolled |
+| L3    | `l3@demo.solvaren` | `demo-L3-executive-2026`  | `135792` | Only after a security key is enrolled |
+
+**Use L1 to get in and look.** L2 and L3 are refused at sign-in with
+`WEBAUTHN_ENROLMENT_REQUIRED` until a key is registered — `issueSession` enforces that in
+the application, so no amount of seeding bypasses it. Both are seeded with a PIN already
+set, so they work the moment a key is enrolled.
+
+**The script refuses to run when `ENVIRONMENT=production`.** These passwords are printed
+above, in a public repository; creating them on a deployment that holds real payment data
+would hand a working login to anyone who reads this file. Overriding the guard takes an
+explicit `I_UNDERSTAND_THIS_IS_INSECURE=yes`. `pnpm seed:demo --remove` deletes them again.
+
+---
+
 ## Deployment
 
 Railway: two services (`solvaren-api`, `solvaren-web`) and a PostgreSQL database, with

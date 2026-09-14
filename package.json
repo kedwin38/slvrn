@@ -20,6 +20,7 @@
     "db:migrate": "node scripts/migrate.mjs",
     "verify": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm check:invariants && pnpm test:coverage && pnpm db:test",
     "db:generate-seed": "node --experimental-strip-types scripts/generate-failure-seed.mjs",
+    "seed:demo": "node scripts/seed-demo.mjs",
     "db:test": "bash scripts/db-test.sh",
     "test:integration": "SOLVAREN_TEST_DATABASE_URL=${SOLVAREN_TEST_DATABASE_URL:-postgres://postgres@localhost:5433/postgres} vitest run apps/api/src/integration.test.ts",
     "db:up": "bash scripts/dev-postgres.sh start",
