@@ -1,0 +1,38 @@
+# Gitleaks findings reviewed and dismissed, by exact fingerprint.
+#
+# Each entry is one specific string, in one specific file, at one specific commit. That
+# precision is the point: this file does NOT exclude test directories, or the
+# `generic-api-key` rule, or anything matching a pattern. A new high-entropy literal —
+# including one pasted into a test file — still fails the build and still has to be looked
+# at by a person. On a repository that moves money, a secret scanner that has been taught
+# to ignore a whole directory is a scanner that will miss the one that matters.
+#
+# Adding a line here is a claim that you read the value and it cannot authenticate against
+# anything. Do not add one to make CI green.
+#
+# NOTE: describe values here, never paste them. The first version of this file quoted the
+# fixture strings in these comments, and gitleaks promptly flagged the ignore file itself —
+# which is a fair demonstration that the suppression really is fingerprint-scoped rather
+# than blanket.
+#
+# All three below are `generic-api-key`, which fires on Shannon entropy rather than on any
+# recognised credential format. Each was read, in place, at the commit named. Follow the
+# fingerprint to see the value in context.
+
+# crypto.test.ts — the plaintext input to an AES-GCM round-trip test. The test encrypts it
+# under a master key declared three lines above, whose own name says it is for tests only,
+# then asserts the ciphertext does not contain it and that it decrypts back. An invented
+# string that authenticates against nothing.
+a05f2efaad065a3b8cf04241fbd4455b7605a120:apps/api/src/services/crypto.test.ts:generic-api-key:133
+
+# test-harness.ts — the integration harness's fixture environment, where the encryption
+# key sits beside similarly constructed session-signing and callback fixtures. Each value
+# is a readable label followed by a counting sequence, and says in its own text that it is
+# a test value.
+172ef7eba5c4f23de662c214def884685014f78e:apps/api/src/test-harness.ts:generic-api-key:223
+
+# client.test.ts — the Daraja client fixture, beside an obviously fake consumer key and
+# secret. A genuine Daraja SecurityCredential is roughly 344 characters of base64 RSA
+# ciphertext; this one is 28, so it could not function as a credential even if Safaricom
+# received it.
+5a3685e585ded6a9d75bac371a962fb25c5bb389:packages/daraja/src/client.test.ts:generic-api-key:18

@@ -1,0 +1,4 @@
+# The SOLVAREN console is an authenticated payment application and must not be indexed.
+# The public marketing site is a separate deployment with its own robots policy.
+User-agent: *
+Disallow: /

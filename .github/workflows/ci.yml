@@ -1,0 +1,242 @@
+#
+# SOLVAREN continuous integration.
+#
+# The gates that matter on a payment platform, in the order that fails fastest:
+#
+#   1. Secrets — nothing resembling a credential reaches the repository.
+#   2. Static analysis — types, lint, format.
+#   3. Unit tests — the domain and security kernel.
+#   4. Database assertions — the immutability guarantees, against real PostgreSQL.
+#   5. Integration tests — the full workflow, against real PostgreSQL.
+#   6. Invariant checks — properties that must hold in the source itself.
+#   7. Build and bundle budget.
+#
+# Steps 4 and 5 run against a real PostgreSQL service rather than a mock, because the
+# guarantees under test are enforced by triggers and constraints. A mocked database would
+# pass while proving nothing.
+#
+
+name: CI
+
+on:
+  push:
+    branches: [main, 'claude/**']
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '22'
+
+permissions:
+  contents: read
+
+jobs:
+  # -------------------------------------------------------------------------
+  secrets:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # gitleaks needs history to scan the whole diff
+
+      - name: Scan for committed secrets
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check for credential-shaped strings
+        # Covered by scripts/check-invariants.sh, which is tested to fail on a real
+        # violation rather than only on a clean tree.
+        run: bash scripts/check-invariants.sh
+
+  # -------------------------------------------------------------------------
+  static:
+    name: Types, lint and format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # No `version:` here on purpose. package.json's `packageManager` field pins the
+      # exact pnpm version, and action-setup refuses to start when both are specified.
+      # The pin is the single source of truth; CI reads it.
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm format:check
+      - run: pnpm lint
+      - run: pnpm typecheck
+
+      - name: Verify the failure dictionary seed is in step with the source
+        run: |
+          set -euo pipefail
+          # The seed migration is generated from packages/core. If they drift, a provider
+          # code would be explained one way by the database and another by the fallback.
+          pnpm db:generate-seed
+          if ! git diff --quiet db/migrations/0005_seed_failure_reasons.sql; then
+            echo "::error::The failure-reason seed is out of date. Run 'pnpm db:generate-seed' and commit the result."
+            git --no-pager diff db/migrations/0005_seed_failure_reasons.sql
+            exit 1
+          fi
+
+  # -------------------------------------------------------------------------
+  test:
+    name: Unit and integration tests
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      # The integration suite refuses to silently skip when this is set, which is the
+      # point: a green CI run that skipped the security tests is worse than a red one.
+      SOLVAREN_TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+      PGHOST: localhost
+      PGPORT: '5432'
+      PGUSER: postgres
+      PGPASSWORD: postgres
+
+    steps:
+      - uses: actions/checkout@v4
+      # No `version:` here on purpose. package.json's `packageManager` field pins the
+      # exact pnpm version, and action-setup refuses to start when both are specified.
+      # The pin is the single source of truth; CI reads it.
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Install the PostgreSQL client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+
+      - name: Database security assertions
+        run: bash scripts/db-test.sh localhost 5432 postgres
+
+      - name: Unit and integration tests
+        run: pnpm test
+
+      - name: Confirm the integration suite actually ran
+        run: |
+          set -euo pipefail
+          # A skipped security suite must fail the build rather than pass quietly.
+          output="$(pnpm vitest run apps/api/src/integration.test.ts --reporter=json 2>/dev/null || true)"
+          if echo "$output" | grep -q '"numPendingTests":[1-9]'; then
+            echo "::error::Integration tests were skipped. SOLVAREN_TEST_DATABASE_URL must be set in CI."
+            exit 1
+          fi
+
+      - name: Coverage
+        run: pnpm test:coverage
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage
+          path: coverage/
+          retention-days: 14
+
+  # -------------------------------------------------------------------------
+  invariants:
+    name: Source invariants
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The same script developers run locally (`pnpm check:invariants`). Keeping it a
+      # script rather than inline YAML means it can be executed, tested and debugged
+      # outside CI — an unrunnable gate is a gate that gets disabled.
+      #
+      # Each check is verified to actually fail: the gate checks match a *call*, not an
+      # import, because grepping for the bare identifier is satisfied by the import alone.
+      - name: Check source invariants
+        run: bash scripts/check-invariants.sh
+
+  # -------------------------------------------------------------------------
+  build:
+    name: Build and bundle budget
+    runs-on: ubuntu-latest
+    needs: [static]
+    steps:
+      - uses: actions/checkout@v4
+      # No `version:` here on purpose. package.json's `packageManager` field pins the
+      # exact pnpm version, and action-setup refuses to start when both are specified.
+      # The pin is the single source of truth; CI reads it.
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      # The API must compile to the artefact the container actually runs. A build that only
+      # typechecks would let a bad emit configuration reach Railway unnoticed.
+      - name: Build the API
+        run: |
+          set -euo pipefail
+          pnpm --filter @solvaren/core build
+          pnpm --filter @solvaren/daraja build
+          pnpm --filter @solvaren/api build
+          test -f apps/api/dist/server.js
+
+      - name: No test code in the deployable output
+        run: |
+          set -euo pipefail
+          # Test fixtures and the disposable-database harness must never ship in an image.
+          found="$(find apps/api/dist packages/core/dist packages/daraja/dist \
+            \( -name '*.test.js' -o -name 'test-harness.js' \) 2>/dev/null || true)"
+          if [ -n "$found" ]; then
+            echo "::error::test code was emitted into the production build:"
+            echo "$found"
+            exit 1
+          fi
+
+      - name: Build the console
+        run: pnpm --filter @solvaren/web build
+
+      - name: Enforce the bundle budget
+        run: |
+          set -euo pipefail
+          # A payment console is opened on a phone over a mobile network during a payroll
+          # run. The budget is enforced rather than aspirational.
+          total=$(find apps/web/dist/assets -name '*.js' -exec gzip -c {} \; | wc -c)
+          budget=$((120 * 1024))
+          echo "Gzipped JavaScript: $((total / 1024)) KB (budget $((budget / 1024)) KB)"
+          if [ "$total" -gt "$budget" ]; then
+            echo "::error::bundle is over budget"
+            exit 1
+          fi
+
+  # -------------------------------------------------------------------------
+  docker:
+    name: Container images build
+    runs-on: ubuntu-latest
+    needs: [static]
+    steps:
+      - uses: actions/checkout@v4
+      # The images are what Railway deploys. A Dockerfile that only works on a developer's
+      # machine is a broken deploy discovered at the worst time.
+      - name: Build the API image
+        run: docker build -f apps/api/Dockerfile -t solvaren-api:ci .
+      - name: Build the console image
+        run: docker build -f apps/web/Dockerfile -t solvaren-web:ci --build-arg VITE_API_BASE_URL=https://api.example.test .

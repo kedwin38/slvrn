@@ -1,0 +1,6 @@
+dist/
+coverage/
+pnpm-lock.yaml
+db/migrations/
+.wrangler/
+apps/web/dist/

@@ -1,0 +1,15 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2023"],
+    "types": ["node"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "noEmit": true,
+    "paths": {
+      "@solvaren/core": ["../../packages/core/src/index.ts"],
+      "@solvaren/daraja": ["../../packages/daraja/src/index.ts"]
+    }
+  },
+  "include": ["src/**/*.ts"]
+}
