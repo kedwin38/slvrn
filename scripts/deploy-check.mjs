@@ -167,6 +167,11 @@ async function main() {
       ['/admin/policies', 'policy settings'],
       ['/admin/audit', 'audit trail'],
       ['/batches', 'batch preparation'],
+      ['/recipients', 'recipient master data'],
+      ['/reconciliation/cases', 'reconciliation'],
+      ['/reports', 'reporting'],
+      ['/admin/security/events', 'security centre'],
+      ['/analytics/action-queue', 'the action queue'],
     ];
 
     for (const [path, label] of guarded) {
@@ -202,6 +207,10 @@ async function main() {
         ['M-PESA credentials', 'M-PESA credentials'],
         ['Audit trail', 'audit trail'],
         ['Members', 'member management'],
+        ['Reconciliation', 'reconciliation'],
+        ['Recipients', 'recipient master data'],
+        ['Security centre', 'security centre'],
+        ['Reports', 'reporting'],
       ]) {
         record(all.includes(needle), `the console ships the ${label} screen`, needle);
       }

@@ -29,6 +29,7 @@ import {
   resolveFailure,
   statusTone,
   isRetryEligible,
+  instructionFingerprint,
   reference,
   validationError,
   authorizationError,
@@ -699,3 +700,194 @@ transactionRoutes.get('/failure-summary', requirePermissions('transactions:read'
 
   return c.json({ failures: summary });
 });
+
+/**
+ * POST /payments/transactions/:id/retry — deliberately re-send a FAILED payment (§4.1, §4.4).
+ *
+ * The explorer has always computed `retryEligible` and had nowhere to send it. This is that
+ * destination, and it is the most dangerous endpoint in the system: a retry that is really a
+ * replay pays somebody twice, and M-PESA does not undo a B2C disbursement.
+ *
+ * Four things make that safe, and each matters on its own:
+ *
+ *   1. Only a FAILED transaction whose failure code is transient may be retried.
+ *      `isRetryEligible` refuses permanent codes — an unregistered recipient or a locked
+ *      security credential will fail identically forever, and retrying it just burns limits.
+ *
+ *   2. The retry carries a NEW idempotency fingerprint, derived with a retry sequence. The
+ *      original fingerprint belongs to the attempt that already reached Daraja; reusing it
+ *      would collide with the spent claim and the executor would skip the work while telling
+ *      the operator it had been re-sent.
+ *
+ *   3. It does not create new payment authority. It re-executes an instruction the L3
+ *      ceremony already authorized, under the same manifest hash and batch version, to the
+ *      same recipient for the same amount. Anything else is a new batch.
+ *
+ *   4. `job_queue_one_live_payment_per_instruction` permits one live payment job per
+ *      instruction, so two operators pressing Retry at once cannot both enqueue.
+ */
+const MAX_MANUAL_RETRIES = 3;
+
+transactionRoutes.post(
+  '/transactions/:id/retry',
+  requirePermissions('transactions:retry'),
+  async (c) => {
+    const actor = actorOf(c);
+    const transactionId = c.req.param('id');
+    const correlationId = c.get('correlationId');
+
+    if (!UUID_PATTERN.test(transactionId)) {
+      throw notFoundError('TRANSACTION_NOT_FOUND', 'That transaction could not be found');
+    }
+
+    const result = await withConnection(c.env, (sql) =>
+      inTransaction(sql, async (tx) => {
+        const rows = await tx<
+          {
+            id: string;
+            status: TxnState;
+            failure_code: string | null;
+            instruction_id: string;
+            batch_id: string;
+            batch_version: number;
+            batch_state: string;
+            msisdn: string;
+            amount_cents: string;
+          }[]
+        >`
+          SELECT t.id, t.status, t.failure_code,
+                 i.id AS instruction_id, i.msisdn_snapshot AS msisdn, i.amount_cents,
+                 b.id AS batch_id, b.version AS batch_version, b.state AS batch_state
+            FROM transactions t
+            JOIN payment_instructions i ON i.id = t.instruction_id
+            JOIN payment_batches b ON b.id = i.batch_id
+           WHERE t.id = ${transactionId} AND t.organization_id = ${actor.organizationId}
+           LIMIT 1
+        `;
+        const row = rows[0];
+        if (!row) {
+          throw notFoundError('TRANSACTION_NOT_FOUND', 'That transaction could not be found');
+        }
+
+        if (!isRetryEligible(row.status, row.failure_code)) {
+          throw validationError(
+            'TRANSACTION_NOT_RETRYABLE',
+            row.status === 'SUCCESS'
+              ? 'This payment succeeded. Retrying it would pay the recipient a second time.'
+              : row.status !== 'FAILED'
+                ? `This transaction is ${row.status}, not FAILED. Wait for an outcome before retrying — resending an in-flight payment risks paying twice.`
+                : 'This failure is permanent for this recipient and amount; retrying produces the same result. Correct the recipient or the amount in a new batch instead.',
+          );
+        }
+
+        /*
+         * A retry re-executes an instruction that was already authorized; it creates no new
+         * authority. The consumed challenge IS that authorization record, carrying both the
+         * manifest hash the L3 signed and the ceremony id — so the re-attempt stays bound to
+         * the same signed intent and remains traceable to the person who released it.
+         */
+        if (row.batch_state === 'CANCELLED') {
+          throw validationError(
+            'BATCH_NOT_AUTHORIZED',
+            'This batch was cancelled, so its instructions cannot be re-sent. Prepare a new batch.',
+          );
+        }
+
+        const challenges = await tx<{ id: string; manifest_hash: string }[]>`
+          SELECT id, manifest_hash FROM authorization_challenges
+           WHERE batch_id = ${row.batch_id} AND consumed_at IS NOT NULL
+           ORDER BY consumed_at DESC LIMIT 1
+        `;
+        const authorization = challenges[0];
+        if (!authorization) {
+          throw validationError(
+            'BATCH_NOT_AUTHORIZED',
+            'No completed authorization exists for this batch, so its payments cannot be re-sent.',
+          );
+        }
+        const challengeId = authorization.id;
+
+        const claims = await tx<{ count: string }[]>`
+          SELECT count(*)::text AS count FROM idempotency_claims
+           WHERE instruction_id = ${row.instruction_id}
+        `;
+        const retrySequence = Number(claims[0]?.count ?? '1');
+        if (retrySequence > MAX_MANUAL_RETRIES) {
+          throw validationError(
+            'RETRY_LIMIT_REACHED',
+            `This instruction has already been attempted ${retrySequence} times. Investigate the cause rather than retrying again.`,
+          );
+        }
+
+        const fingerprint = await instructionFingerprint({
+          organizationId: actor.organizationId,
+          batchId: row.batch_id,
+          instructionId: row.instruction_id,
+          batchVersion: row.batch_version,
+          msisdn: row.msisdn,
+          amountCents: Number(row.amount_cents),
+          manifestHash: authorization.manifest_hash,
+          retrySequence,
+        });
+
+        const claimed = await tx<{ fingerprint: string }[]>`
+          INSERT INTO idempotency_claims (fingerprint, organization_id, instruction_id, state)
+          VALUES (${fingerprint}, ${actor.organizationId}, ${row.instruction_id}, 'CLAIMED')
+          ON CONFLICT (fingerprint) DO NOTHING
+          RETURNING fingerprint
+        `;
+        if (claimed.length === 0) {
+          throw validationError(
+            'RETRY_ALREADY_IN_FLIGHT',
+            'A retry of this payment has already been claimed. Wait for its outcome rather than sending another.',
+          );
+        }
+
+        // Enqueued in the same transaction as the claim: a committed claim with no job
+        // would leave an instruction that can never be retried again.
+        await c.env.queue.send(
+          {
+            queue: 'payments',
+            body: {
+              type: 'EXECUTE_INSTRUCTION',
+              organizationId: actor.organizationId,
+              batchId: row.batch_id,
+              instructionId: row.instruction_id,
+              batchVersion: row.batch_version,
+              manifestHash: authorization.manifest_hash,
+              fingerprint,
+              challengeId,
+              correlationId,
+              attempt: 0,
+            },
+          },
+          tx,
+        );
+
+        await writeAuditEvent(tx, {
+          organizationId: actor.organizationId,
+          actorId: actor.userId,
+          actorLevel: actor.level,
+          eventClass: 'PAYMENT',
+          action: 'transaction.retry.requested',
+          objectType: 'Transaction',
+          objectId: transactionId,
+          outcome: 'SUCCESS',
+          previousState: { status: row.status, failureCode: row.failure_code },
+          correlationId,
+          securityContext: c.get('securityContext'),
+          detail: { retrySequence, instructionId: row.instruction_id },
+        });
+
+        return { retrySequence };
+      }),
+    );
+
+    return c.json({
+      accepted: true,
+      retrySequence: result.retrySequence,
+      message:
+        'The payment has been queued for another attempt. Its outcome arrives asynchronously, like any other disbursement.',
+    });
+  },
+);

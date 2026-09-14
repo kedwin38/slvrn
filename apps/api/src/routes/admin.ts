@@ -26,7 +26,7 @@ import {
   requireExactLevel,
   actorOf,
 } from '../middleware/security.js';
-import { withConnection, inTransaction } from '../db/client.js';
+import { withConnection, inTransaction, uuidSet } from '../db/client.js';
 import { writeAuditEvent } from '../db/audit-writer.js';
 import {
   configureDaraja,
@@ -1301,5 +1301,365 @@ adminRoutes.post(
     );
 
     return c.json(issued, 201);
+  },
+);
+
+// ---------------------------------------------------------------------------
+// Security Centre (L3 ONLY — spec §8, §13)
+// ---------------------------------------------------------------------------
+
+/**
+ * The platform has been writing security events since the first commit — failed sign-ins,
+ * callback signature mismatches, reconciliation escalations, recipient payment-detail
+ * changes — and nothing could read them. A detection that nobody can see is not a control,
+ * so this is the console that closes that loop.
+ *
+ * Acknowledgement is a real state change, not a dismiss button: it records who looked at a
+ * CRITICAL event and when, which is the question asked first after an incident.
+ */
+
+const securityQuerySchema = z.object({
+  severity: z.enum(['INFO', 'WARNING', 'CRITICAL']).optional(),
+  eventType: z.string().trim().max(64).optional(),
+  unacknowledgedOnly: z.coerce.boolean().optional(),
+  page: z.coerce.number().int().min(1).default(1),
+  pageSize: z.coerce.number().int().min(1).max(200).default(50),
+});
+
+adminRoutes.get(
+  '/security/events',
+  requireExactLevel('L3'),
+  requirePermissions('admin:security'),
+  async (c) => {
+    const actor = actorOf(c);
+    const query = securityQuerySchema.parse(c.req.query());
+    const offset = (query.page - 1) * query.pageSize;
+
+    const result = await withConnection(c.env, async (sql) => {
+      const rows = await sql<
+        {
+          id: string;
+          event_type: string;
+          severity: string;
+          description: string;
+          ip: string | null;
+          user_agent: string | null;
+          detail: unknown;
+          created_at: string;
+          acknowledged_at: string | null;
+          user_name: string | null;
+          user_email: string | null;
+          acknowledged_by_name: string | null;
+          total_count: string;
+        }[]
+      >`
+        SELECT se.id, se.event_type, se.severity, se.description, host(se.ip) AS ip,
+               se.user_agent, se.detail, se.created_at, se.acknowledged_at,
+               u.full_name AS user_name, u.email AS user_email,
+               ack.full_name AS acknowledged_by_name,
+               count(*) OVER ()::text AS total_count
+          FROM security_events se
+          LEFT JOIN users u   ON u.id = se.user_id
+          LEFT JOIN users ack ON ack.id = se.acknowledged_by
+         WHERE se.organization_id = ${actor.organizationId}
+           ${query.severity ? sql`AND se.severity = ${query.severity}` : sql``}
+           ${query.eventType ? sql`AND se.event_type = ${query.eventType}` : sql``}
+           ${query.unacknowledgedOnly ? sql`AND se.acknowledged_at IS NULL` : sql``}
+         ORDER BY se.created_at DESC
+         LIMIT ${query.pageSize} OFFSET ${offset}
+      `;
+
+      const counts = await sql<{ severity: string; open: string; total: string }[]>`
+        SELECT severity,
+               count(*) FILTER (WHERE acknowledged_at IS NULL)::text AS open,
+               count(*)::text AS total
+          FROM security_events
+         WHERE organization_id = ${actor.organizationId}
+         GROUP BY severity
+      `;
+
+      const totalRows = rows.length > 0 ? Number(rows[0]!.total_count) : 0;
+      return {
+        events: rows.map((row) => ({
+          id: row.id,
+          eventType: row.event_type,
+          severity: row.severity,
+          description: row.description,
+          ip: row.ip,
+          userAgent: row.user_agent,
+          detail: row.detail,
+          createdAt: row.created_at,
+          acknowledgedAt: row.acknowledged_at,
+          acknowledgedBy: row.acknowledged_by_name,
+          user: row.user_name ? { name: row.user_name, email: row.user_email } : null,
+        })),
+        counts: counts.map((row) => ({
+          severity: row.severity,
+          open: Number(row.open),
+          total: Number(row.total),
+        })),
+        page: {
+          page: query.page,
+          pageSize: query.pageSize,
+          totalRows,
+          totalPages: Math.max(1, Math.ceil(totalRows / query.pageSize)),
+          hasNext: query.page * query.pageSize < totalRows,
+          hasPrevious: query.page > 1,
+        },
+      };
+    });
+
+    return c.json(result);
+  },
+);
+
+const acknowledgeSchema = z.object({
+  eventIds: z.array(z.string().uuid()).min(1).max(200),
+  note: z.string().trim().max(1000).optional(),
+});
+
+adminRoutes.post(
+  '/security/events/acknowledge',
+  requireExactLevel('L3'),
+  requirePermissions('admin:security'),
+  async (c) => {
+    const actor = actorOf(c);
+    const body = acknowledgeSchema.parse(await c.req.json());
+    const correlationId = c.get('correlationId');
+
+    const acknowledged = await withConnection(c.env, (sql) =>
+      inTransaction(sql, async (tx) => {
+        // Already-acknowledged events are left alone, so the first reviewer's name and
+        // timestamp survive a second pass over the list.
+        const rows = await tx<{ id: string }[]>`
+          UPDATE security_events
+             SET acknowledged_at = now(), acknowledged_by = ${actor.userId}
+           WHERE organization_id = ${actor.organizationId}
+             AND acknowledged_at IS NULL
+             AND id IN (${uuidSet(tx, body.eventIds)})
+          RETURNING id
+        `;
+        if (rows.length > 0) {
+          await writeAuditEvent(tx, {
+            organizationId: actor.organizationId,
+            actorId: actor.userId,
+            actorLevel: actor.level,
+            eventClass: 'SECURITY',
+            action: 'security.events.acknowledged',
+            objectType: 'SecurityEvent',
+            objectId: rows[0]!.id,
+            outcome: 'SUCCESS',
+            correlationId,
+            securityContext: c.get('securityContext'),
+            detail: { count: rows.length, note: body.note ?? null },
+          });
+        }
+        return rows.length;
+      }),
+    );
+
+    return c.json({ acknowledged });
+  },
+);
+
+/**
+ * GET /admin/security/sessions — who is signed in right now, and from where.
+ *
+ * Session hijacking looks exactly like normal use unless somebody can see two live sessions
+ * for one account from two countries. This is that view, and the revoke below is the lever
+ * it exists to justify.
+ */
+adminRoutes.get(
+  '/security/sessions',
+  requireExactLevel('L3'),
+  requirePermissions('admin:security'),
+  async (c) => {
+    const actor = actorOf(c);
+
+    const result = await withConnection(c.env, async (sql) => {
+      const sessions = await sql<
+        {
+          id: string;
+          user_name: string;
+          email: string;
+          authority_level: string;
+          issued_at: string;
+          expires_at: string;
+          last_seen_at: string;
+          webauthn_verified_at: string | null;
+          ip: string | null;
+          user_agent: string | null;
+          device_label: string | null;
+          trust_status: string | null;
+        }[]
+      >`
+        SELECT s.id, u.full_name AS user_name, u.email, u.authority_level,
+               s.issued_at, s.expires_at, s.last_seen_at, s.webauthn_verified_at,
+               host(s.ip) AS ip, s.user_agent,
+               td.label AS device_label, td.trust_status
+          FROM sessions s
+          JOIN users u ON u.id = s.user_id
+          LEFT JOIN trusted_devices td ON td.id = s.trusted_device_id
+         WHERE s.organization_id = ${actor.organizationId}
+           AND s.revoked_at IS NULL AND s.expires_at > now()
+         ORDER BY s.last_seen_at DESC
+         LIMIT 200
+      `;
+
+      const devices = await sql<
+        {
+          id: string;
+          user_name: string;
+          email: string;
+          label: string | null;
+          trust_status: string;
+          first_seen_ip: string | null;
+          last_seen_ip: string | null;
+          user_agent: string | null;
+          registered_at: string;
+          last_activity_at: string;
+        }[]
+      >`
+        SELECT td.id, u.full_name AS user_name, u.email, td.label, td.trust_status,
+               host(td.first_seen_ip) AS first_seen_ip, host(td.last_seen_ip) AS last_seen_ip,
+               td.user_agent, td.registered_at, td.last_activity_at
+          FROM trusted_devices td
+          JOIN users u ON u.id = td.user_id
+         WHERE td.organization_id = ${actor.organizationId} AND td.revoked_at IS NULL
+         ORDER BY td.last_activity_at DESC
+         LIMIT 200
+      `;
+
+      return {
+        sessions: sessions.map((s) => ({
+          id: s.id,
+          userName: s.user_name,
+          email: s.email,
+          authorityLevel: s.authority_level,
+          issuedAt: s.issued_at,
+          expiresAt: s.expires_at,
+          lastSeenAt: s.last_seen_at,
+          webauthnVerified: s.webauthn_verified_at !== null,
+          ip: s.ip,
+          userAgent: s.user_agent,
+          deviceLabel: s.device_label,
+          deviceTrust: s.trust_status,
+        })),
+        devices: devices.map((d) => ({
+          id: d.id,
+          userName: d.user_name,
+          email: d.email,
+          label: d.label,
+          trustStatus: d.trust_status,
+          firstSeenIp: d.first_seen_ip,
+          lastSeenIp: d.last_seen_ip,
+          userAgent: d.user_agent,
+          registeredAt: d.registered_at,
+          lastActivityAt: d.last_activity_at,
+        })),
+      };
+    });
+
+    return c.json(result);
+  },
+);
+
+adminRoutes.post(
+  '/security/sessions/:id/revoke',
+  requireExactLevel('L3'),
+  requirePermissions('admin:security'),
+  async (c) => {
+    const actor = actorOf(c);
+    const sessionId = c.req.param('id');
+    const correlationId = c.get('correlationId');
+
+    const revoked = await withConnection(c.env, (sql) =>
+      inTransaction(sql, async (tx) => {
+        const rows = await tx<{ id: string; user_id: string }[]>`
+          UPDATE sessions
+             SET revoked_at = now(), revocation_reason = 'REVOKED_BY_ADMINISTRATOR'
+           WHERE id = ${sessionId} AND organization_id = ${actor.organizationId}
+             AND revoked_at IS NULL
+          RETURNING id, user_id
+        `;
+        const row = rows[0];
+        if (!row) {
+          throw notFoundError('SESSION_NOT_FOUND', 'That session is not active');
+        }
+        await tx`
+          INSERT INTO security_events (organization_id, user_id, event_type, severity, description, detail)
+          VALUES (
+            ${actor.organizationId}, ${row.user_id}, 'SESSION_REVOKED_BY_ADMIN', 'WARNING',
+            ${'A session was revoked by an administrator'},
+            ${tx.json({ sessionId, revokedBy: actor.userId })}
+          )
+        `;
+        await writeAuditEvent(tx, {
+          organizationId: actor.organizationId,
+          actorId: actor.userId,
+          actorLevel: actor.level,
+          eventClass: 'SECURITY',
+          action: 'session.revoked',
+          objectType: 'Session',
+          objectId: sessionId,
+          outcome: 'SUCCESS',
+          correlationId,
+          securityContext: c.get('securityContext'),
+          detail: { targetUserId: row.user_id },
+        });
+        return true;
+      }),
+    );
+
+    return c.json({ revoked });
+  },
+);
+
+adminRoutes.post(
+  '/security/devices/:id/revoke',
+  requireExactLevel('L3'),
+  requirePermissions('admin:security'),
+  async (c) => {
+    const actor = actorOf(c);
+    const deviceId = c.req.param('id');
+    const correlationId = c.get('correlationId');
+
+    await withConnection(c.env, (sql) =>
+      inTransaction(sql, async (tx) => {
+        const rows = await tx<{ id: string; user_id: string; label: string | null }[]>`
+          UPDATE trusted_devices
+             SET trust_status = 'REVOKED', revoked_at = now()
+           WHERE id = ${deviceId} AND organization_id = ${actor.organizationId}
+             AND revoked_at IS NULL
+          RETURNING id, user_id, label
+        `;
+        const row = rows[0];
+        if (!row) throw notFoundError('DEVICE_NOT_FOUND', 'That device could not be found');
+
+        // Revoking the device without its live sessions would leave the attacker signed in
+        // on the very machine just declared untrusted.
+        await tx`
+          UPDATE sessions
+             SET revoked_at = now(), revocation_reason = 'DEVICE_REVOKED'
+           WHERE trusted_device_id = ${deviceId} AND revoked_at IS NULL
+        `;
+
+        await writeAuditEvent(tx, {
+          organizationId: actor.organizationId,
+          actorId: actor.userId,
+          actorLevel: actor.level,
+          eventClass: 'SECURITY',
+          action: 'trusted_device.revoked',
+          objectType: 'TrustedDevice',
+          objectId: deviceId,
+          outcome: 'SUCCESS',
+          correlationId,
+          securityContext: c.get('securityContext'),
+          detail: { targetUserId: row.user_id, label: row.label },
+        });
+      }),
+    );
+
+    return c.json({ revoked: true });
   },
 );

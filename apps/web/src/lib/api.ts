@@ -389,6 +389,158 @@ export interface ExplorerResponse {
   filter: { text: string; parts: string[] };
 }
 
+export interface PageInfo {
+  page: number;
+  pageSize: number;
+  totalRows: number;
+  totalPages: number;
+  hasNext: boolean;
+  hasPrevious: boolean;
+}
+
+/** One thing waiting for the signed-in person, computed server-side from their own authority. */
+export interface ActionQueueItem {
+  kind: string;
+  severity: 'info' | 'warning' | 'critical';
+  title: string;
+  detail: string;
+  count: number;
+  /** The console route that acts on it, so the notification is a door and not just a notice. */
+  route: string;
+  oldestAt: string | null;
+}
+
+export interface ReconciliationCaseView {
+  caseId: string;
+  caseReference: string;
+  state: string;
+  openedReason: string;
+  discrepancy: boolean;
+  queryAttempts: number;
+  nextQueryAt: string | null;
+  openedAt: string;
+  resolvedAt: string | null;
+  resolvedBy: string | null;
+  resolutionNote: string | null;
+  evidence: unknown;
+  transaction: {
+    transactionId: string;
+    status: string;
+    statusTone: string;
+    failureCode: string | null;
+    failureReason: string | null;
+    providerResultDescription: string | null;
+    mpesaReceiptNumber: string | null;
+    originatorConversationId: string | null;
+    conversationId: string | null;
+    amountCents: number;
+    recipientName: string;
+    msisdn: string;
+    batchId: string;
+    batchReference: string;
+  };
+}
+
+export interface RecipientView {
+  id: string;
+  fullName: string;
+  msisdn: string;
+  status: string;
+  externalReference: string | null;
+  departmentId: string | null;
+  departmentName: string | null;
+  createdAt: string;
+  updatedAt: string;
+  paymentDetailsModifiedAt: string;
+}
+
+export interface RecipientPayment {
+  transactionId: string;
+  status: string;
+  statusTone: string;
+  amountCents: number;
+  /** What the number was at the time of payment, which may not be the number today. */
+  paidToMsisdn: string;
+  batchReference: string;
+  mpesaReceiptNumber: string | null;
+  failureReason: string | null;
+  createdAt: string;
+  completedAt: string | null;
+}
+
+export interface DepartmentView {
+  id: string;
+  name: string;
+  code: string | null;
+  status: string;
+  monthlyBudgetCents: number | null;
+  recipientCount: number;
+}
+
+export interface SecurityEventView {
+  id: string;
+  eventType: string;
+  severity: 'INFO' | 'WARNING' | 'CRITICAL';
+  description: string;
+  ip: string | null;
+  userAgent: string | null;
+  detail: unknown;
+  createdAt: string;
+  acknowledgedAt: string | null;
+  acknowledgedBy: string | null;
+  user: { name: string; email: string | null } | null;
+}
+
+export interface LiveSessionView {
+  id: string;
+  userName: string;
+  email: string;
+  authorityLevel: string;
+  issuedAt: string;
+  expiresAt: string;
+  lastSeenAt: string;
+  webauthnVerified: boolean;
+  ip: string | null;
+  userAgent: string | null;
+  deviceLabel: string | null;
+  deviceTrust: string | null;
+}
+
+export interface TrustedDeviceView {
+  id: string;
+  userName: string;
+  email: string;
+  label: string | null;
+  trustStatus: string;
+  firstSeenIp: string | null;
+  lastSeenIp: string | null;
+  userAgent: string | null;
+  registeredAt: string;
+  lastActivityAt: string;
+}
+
+export interface ReportColumnView {
+  key: string;
+  label: string;
+  format?: 'money' | 'number' | 'text' | 'timestamp';
+}
+
+export interface ReportDocumentView {
+  family: string;
+  title: string;
+  description: string;
+  periodFrom: string;
+  periodTo: string;
+  highlights: { label: string; value: string; hint?: string }[];
+  sections: {
+    title: string;
+    columns: ReportColumnView[];
+    rows: Record<string, string | number | null>[];
+  }[];
+  /** Kept separate from the computed sections — spec §12.2. */
+  narrative: { text: string; source: 'AI_ADVISORY'; model: string } | null;
+}
+
 export interface OperationalDashboard {
   batchesByState: Record<string, number>;
   transactions: {
@@ -606,6 +758,12 @@ export const api = {
       request<{ accepted: boolean; message: string }>(`/payments/transactions/${id}/refresh`, {
         method: 'POST',
       }),
+
+    retry: (id: string) =>
+      request<{ accepted: boolean; retrySequence: number; message: string }>(
+        `/payments/transactions/${id}/retry`,
+        { method: 'POST' },
+      ),
 
     failureSummary: (batchId?: string) =>
       request<{
@@ -850,6 +1008,28 @@ export const api = {
     },
   },
 
+  security: {
+    events: (params: URLSearchParams) =>
+      request<{
+        events: SecurityEventView[];
+        counts: { severity: string; open: number; total: number }[];
+        page: PageInfo;
+      }>(`/admin/security/events?${params.toString()}`),
+    acknowledge: (eventIds: string[], note?: string) =>
+      request<{ acknowledged: number }>('/admin/security/events/acknowledge', {
+        method: 'POST',
+        body: JSON.stringify({ eventIds, note }),
+      }),
+    sessions: () =>
+      request<{ sessions: LiveSessionView[]; devices: TrustedDeviceView[] }>(
+        '/admin/security/sessions',
+      ),
+    revokeSession: (id: string) =>
+      request<{ revoked: boolean }>(`/admin/security/sessions/${id}/revoke`, { method: 'POST' }),
+    revokeDevice: (id: string) =>
+      request<{ revoked: boolean }>(`/admin/security/devices/${id}/revoke`, { method: 'POST' }),
+  },
+
   authorization: {
     begin: (batchId: string) =>
       request<CeremonyResponse>(`/authorization/batches/${batchId}/begin`, { method: 'POST' }),
@@ -902,6 +1082,113 @@ export const api = {
           at: string;
         }[];
       }>('/analytics/executive/recent-transactions'),
+
+    actionQueue: () =>
+      request<{
+        items: ActionQueueItem[];
+        counts: { total: number; critical: number; warning: number };
+      }>('/analytics/action-queue'),
+  },
+
+  reconciliation: {
+    summary: () =>
+      request<{
+        byState: Record<string, number>;
+        outstanding: number;
+        discrepancies: number;
+        oldestOutstandingAt: string | null;
+      }>('/reconciliation/summary'),
+    list: (params: URLSearchParams) =>
+      request<{ cases: ReconciliationCaseView[]; page: PageInfo }>(
+        `/reconciliation/cases?${params.toString()}`,
+      ),
+    detail: (id: string) =>
+      request<{
+        case: ReconciliationCaseView;
+        activity: { action: string; outcome: string; occurred_at: string; detail: unknown }[];
+      }>(`/reconciliation/cases/${id}`),
+    query: (id: string) =>
+      request<{ accepted: boolean; message: string }>(`/reconciliation/cases/${id}/query`, {
+        method: 'POST',
+      }),
+    resolve: (
+      id: string,
+      body: {
+        outcome: 'FAILED' | 'MANUAL';
+        failureCode?: string;
+        providerReceipt?: string;
+        note: string;
+      },
+    ) =>
+      request<{ resolved: boolean; state: string; message: string }>(
+        `/reconciliation/cases/${id}/resolve`,
+        { method: 'POST', body: JSON.stringify(body) },
+      ),
+  },
+
+  recipients: {
+    list: (params: URLSearchParams) =>
+      request<{ recipients: RecipientView[]; page: PageInfo }>(`/recipients?${params.toString()}`),
+    detail: (id: string) =>
+      request<{
+        recipient: RecipientView;
+        totals: { successfulPayments: number; totalPaidCents: number };
+        history: RecipientPayment[];
+        changes: {
+          action: string;
+          occurred_at: string;
+          previous_state: unknown;
+          new_state: unknown;
+        }[];
+      }>(`/recipients/${id}`),
+    create: (body: {
+      fullName: string;
+      msisdn: string;
+      departmentId?: string | null;
+      externalReference?: string | null;
+    }) =>
+      request<{ recipient: { id: string } }>('/recipients', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+    update: (
+      id: string,
+      body: {
+        fullName?: string;
+        msisdn?: string;
+        departmentId?: string | null;
+        externalReference?: string | null;
+        status?: 'ACTIVE' | 'INACTIVE' | 'BLOCKED';
+        reason?: string;
+      },
+    ) =>
+      request<{ updated: boolean; paymentDetailsChanged: boolean; message: string }>(
+        `/recipients/${id}`,
+        { method: 'PATCH', body: JSON.stringify(body) },
+      ),
+    departments: () => request<{ departments: DepartmentView[] }>('/recipients/departments'),
+    createDepartment: (body: {
+      name: string;
+      code?: string | null;
+      monthlyBudgetCents?: number | null;
+    }) =>
+      request<{ department: { id: string; name: string } }>('/recipients/departments', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+  },
+
+  reports: {
+    catalogue: () =>
+      request<{
+        reports: { family: string; title: string; description: string; permission: string }[];
+      }>('/reports'),
+    generate: (family: string, from: string, to: string) =>
+      request<{ report: ReportDocumentView; exportReference: string; generatedAt: string }>(
+        `/reports/${family}?from=${from}&to=${to}`,
+      ),
+    downloadCsv: (family: string, from: string, to: string) =>
+      downloadCsv(`/reports/${family}?from=${from}&to=${to}&format=csv`),
   },
 
   backups: {

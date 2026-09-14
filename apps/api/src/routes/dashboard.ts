@@ -15,7 +15,7 @@
  */
 
 import { Hono } from 'hono';
-import { authorizationError } from '@solvaren/core';
+import { authorizationError, hasPermission, formatCents } from '@solvaren/core';
 import {
   requireAuth,
   requirePermissions,
@@ -24,6 +24,7 @@ import {
 } from '../middleware/security.js';
 import { withConnection, inTransaction } from '../db/client.js';
 import { writeAuditEvent } from '../db/audit-writer.js';
+import { toActor } from '../services/auth.js';
 import type { AppContext, ReconciliationQueueMessage } from '../env.js';
 
 export const dashboardRoutes = new Hono<AppContext>();
@@ -467,4 +468,296 @@ dashboardRoutes.get('/executive/briefing', requirePermissions('analytics:executi
   });
 
   return c.json(data);
+});
+
+// ---------------------------------------------------------------------------
+// Action queue (spec §7.3, §21 — "a batch is waiting for you")
+// ---------------------------------------------------------------------------
+
+/**
+ * GET /analytics/action-queue — what is waiting for *this* person, right now.
+ *
+ * Separation of duties has an operational cost nobody designs for: a batch sits in
+ * AUTHORIZATION_PENDING because the one person who can release it does not know it is there.
+ * Salaries are late, somebody phones somebody, and the control gets blamed for the delay.
+ *
+ * There is no SMS and no email here, per the standing constraint. The signal is in the
+ * console, computed per-actor from the actor's own permissions — so an L1 is told their batch
+ * was returned for correction, an L2 is told what is queued for review, and only an L3 is
+ * told there is money waiting to be released.
+ *
+ * Every item is derived from the same authority rules the endpoints enforce. Nothing here
+ * grants access; it reports what the caller could already do.
+ */
+dashboardRoutes.get('/action-queue', async (c) => {
+  const actor = actorOf(c);
+  const capabilities = toActor(actor);
+
+  const items = await withConnection(c.env, async (sql) => {
+    const queue: {
+      kind: string;
+      severity: 'info' | 'warning' | 'critical';
+      title: string;
+      detail: string;
+      count: number;
+      route: string;
+      oldestAt: string | null;
+    }[] = [];
+
+    /*
+     * Batch work, by the state that is waiting on this level. The three levels see three
+     * different queues out of the same table, which is what separation of duties means in
+     * practice.
+     */
+    const batches = await sql<
+      { state: string; count: string; total_cents: string; oldest_at: string }[]
+    >`
+      SELECT state, count(*)::text AS count,
+             COALESCE(sum(total_amount_cents), 0)::text AS total_cents,
+             min(updated_at) AS oldest_at
+        FROM payment_batches
+       WHERE organization_id = ${actor.organizationId}
+         AND state IN ('DRAFT', 'VALIDATED', 'SUBMITTED_TO_L2', 'L2_REVIEW', 'L3_READY',
+                       'AUTHORIZATION_PENDING', 'HELD')
+       GROUP BY state
+    `;
+    const byState = new Map(batches.map((row) => [row.state, row]));
+    const add = (
+      state: string,
+      kind: string,
+      severity: 'info' | 'warning' | 'critical',
+      title: (count: number, value: string) => string,
+      detail: string,
+      route: string,
+    ) => {
+      const row = byState.get(state);
+      if (!row || Number(row.count) === 0) return;
+      queue.push({
+        kind,
+        severity,
+        title: title(Number(row.count), formatCents(Number(row.total_cents))),
+        detail,
+        count: Number(row.count),
+        route,
+        oldestAt: row.oldest_at,
+      });
+    };
+
+    if (hasPermission(capabilities, 'payment:release')) {
+      add(
+        'L3_READY',
+        'BATCH_AWAITING_RELEASE',
+        'warning',
+        (n, value) =>
+          `${n} batch${n === 1 ? '' : 'es'} worth KES ${value} ${n === 1 ? 'is' : 'are'} approved and waiting for your release`,
+        'Finance review is complete. Nothing moves until you authorize it.',
+        'authorize',
+      );
+      add(
+        'AUTHORIZATION_PENDING',
+        'AUTHORIZATION_IN_PROGRESS',
+        'warning',
+        (n) => `${n} authorization ceremony${n === 1 ? '' : 's'} started but not completed`,
+        'A challenge was issued and never used. It expires on its own; the batch stays unpaid until it is released.',
+        'authorize',
+      );
+    }
+    if (hasPermission(capabilities, 'batch:approve_to_l3')) {
+      add(
+        'SUBMITTED_TO_L2',
+        'BATCH_AWAITING_REVIEW',
+        'info',
+        (n, value) =>
+          `${n} batch${n === 1 ? '' : 'es'} worth KES ${value} waiting for finance review`,
+        'Submitted by preparation and not yet reviewed.',
+        'batches',
+      );
+      add(
+        'L2_REVIEW',
+        'BATCH_IN_REVIEW',
+        'info',
+        (n) => `${n} batch${n === 1 ? '' : 'es'} open in review`,
+        'Review was started and not concluded.',
+        'batches',
+      );
+    }
+    if (hasPermission(capabilities, 'batch:edit')) {
+      add(
+        'DRAFT',
+        'BATCH_DRAFT',
+        'info',
+        (n) => `${n} draft batch${n === 1 ? '' : 'es'} not yet submitted`,
+        'Still editable, and not visible to finance review until submitted.',
+        'batches',
+      );
+      add(
+        'VALIDATED',
+        'BATCH_VALIDATED',
+        'info',
+        (n) => `${n} validated batch${n === 1 ? '' : 'es'} ready to submit`,
+        'Validation passed. Submitting sends it to finance review.',
+        'batches',
+      );
+    }
+    if (hasPermission(capabilities, 'batch:read')) {
+      add(
+        'HELD',
+        'BATCH_HELD',
+        'warning',
+        (n) => `${n} batch${n === 1 ? '' : 'es'} on hold`,
+        'Held pending a decision. A held batch pays nobody.',
+        'batches',
+      );
+    }
+
+    if (hasPermission(capabilities, 'reconciliation:read')) {
+      const cases = await sql<{ count: string; oldest_at: string | null }[]>`
+        SELECT count(*)::text AS count, min(opened_at) AS oldest_at
+          FROM reconciliation_cases
+         WHERE organization_id = ${actor.organizationId}
+           AND state IN ('OPEN', 'QUERYING', 'ESCALATED')
+      `;
+      const count = Number(cases[0]?.count ?? '0');
+      if (count > 0) {
+        queue.push({
+          kind: 'RECONCILIATION_OPEN',
+          // Critical rather than warning: each of these is a payment whose outcome the
+          // organisation cannot state, which is worse than a known failure.
+          severity: 'critical',
+          title: `${count} payment${count === 1 ? '' : 's'} with an unknown outcome`,
+          detail: 'M-PESA has not confirmed whether these paid. They need investigation.',
+          count,
+          route: 'reconciliation',
+          oldestAt: cases[0]?.oldest_at ?? null,
+        });
+      }
+    }
+
+    if (hasPermission(capabilities, 'transactions:retry')) {
+      const failed = await sql<{ count: string; oldest_at: string | null }[]>`
+        SELECT count(*)::text AS count, min(t.completed_at) AS oldest_at
+          FROM transactions t
+         WHERE t.organization_id = ${actor.organizationId}
+           AND t.status = 'FAILED'
+           AND t.completed_at > now() - interval '30 days'
+      `;
+      const count = Number(failed[0]?.count ?? '0');
+      if (count > 0) {
+        queue.push({
+          kind: 'TRANSACTIONS_FAILED',
+          severity: 'warning',
+          title: `${count} failed payment${count === 1 ? '' : 's'} in the last 30 days`,
+          detail: 'Each has a provider code and a reason. Transient failures can be retried.',
+          count,
+          route: 'transactions',
+          oldestAt: failed[0]?.oldest_at ?? null,
+        });
+      }
+    }
+
+    if (hasPermission(capabilities, 'admin:security')) {
+      const events = await sql<{ count: string; oldest_at: string | null }[]>`
+        SELECT count(*)::text AS count, min(created_at) AS oldest_at
+          FROM security_events
+         WHERE organization_id = ${actor.organizationId}
+           AND acknowledged_at IS NULL AND severity IN ('WARNING', 'CRITICAL')
+      `;
+      const count = Number(events[0]?.count ?? '0');
+      if (count > 0) {
+        queue.push({
+          kind: 'SECURITY_EVENTS_UNACKNOWLEDGED',
+          severity: 'critical',
+          title: `${count} security event${count === 1 ? '' : 's'} nobody has reviewed`,
+          detail: 'Failed sign-ins, changed payment details, revoked devices and the like.',
+          count,
+          route: 'security-centre',
+          oldestAt: events[0]?.oldest_at ?? null,
+        });
+      }
+
+      const dead = await sql<{ count: string }[]>`
+        SELECT count(*)::text AS count FROM job_queue
+         WHERE organization_id = ${actor.organizationId} AND status = 'DEAD_LETTER'
+      `;
+      if (Number(dead[0]?.count ?? '0') > 0) {
+        queue.push({
+          kind: 'JOBS_DEAD_LETTERED',
+          severity: 'critical',
+          title: `${dead[0]!.count} background job${dead[0]!.count === '1' ? '' : 's'} gave up`,
+          detail: 'The platform stopped retrying this work. It will not complete on its own.',
+          count: Number(dead[0]!.count),
+          route: 'dashboard',
+          oldestAt: null,
+        });
+      }
+    }
+
+    if (hasPermission(capabilities, 'admin:daraja')) {
+      // A batch released against expired credentials fails at the provider, one instruction
+      // at a time, after the ceremony is spent.
+      const config = await sql<{ environment: string; status: string }[]>`
+        SELECT environment, status FROM daraja_configurations
+         WHERE organization_id = ${actor.organizationId}
+      `;
+      if (config.length === 0) {
+        queue.push({
+          kind: 'DARAJA_NOT_CONFIGURED',
+          severity: 'critical',
+          title: 'M-PESA credentials are not configured',
+          detail: 'No payment can be executed until Daraja is configured and verified.',
+          count: 1,
+          route: 'daraja',
+          oldestAt: null,
+        });
+      } else {
+        const unhealthy = config.filter((row) => row.status !== 'ACTIVE');
+        if (unhealthy.length > 0) {
+          queue.push({
+            kind: 'DARAJA_UNHEALTHY',
+            severity: 'critical',
+            title: `M-PESA credentials need attention (${unhealthy.map((u) => `${u.environment}: ${u.status}`).join(', ')})`,
+            detail: 'Payments submitted against these credentials will be rejected by Safaricom.',
+            count: unhealthy.length,
+            route: 'daraja',
+            oldestAt: null,
+          });
+        }
+      }
+    }
+
+    if (hasPermission(capabilities, 'admin:users')) {
+      const pending = await sql<{ count: string }[]>`
+        SELECT count(*)::text AS count FROM enrolment_tokens
+         WHERE organization_id = ${actor.organizationId}
+           AND consumed_at IS NULL AND expires_at > now()
+      `;
+      if (Number(pending[0]?.count ?? '0') > 0) {
+        queue.push({
+          kind: 'ENROLMENT_PENDING',
+          severity: 'info',
+          title: `${pending[0]!.count} account${pending[0]!.count === '1' ? ' is' : 's are'} waiting to enrol a security key`,
+          detail: 'Until the key is enrolled, the account cannot sign in above Level 1.',
+          count: Number(pending[0]!.count),
+          route: 'users',
+          oldestAt: null,
+        });
+      }
+    }
+
+    const order = { critical: 0, warning: 1, info: 2 } as const;
+    queue.sort(
+      (a, b) =>
+        order[a.severity] - order[b.severity] || (a.oldestAt ?? '').localeCompare(b.oldestAt ?? ''),
+    );
+    return queue;
+  });
+
+  return c.json({
+    items,
+    counts: {
+      total: items.length,
+      critical: items.filter((i) => i.severity === 'critical').length,
+      warning: items.filter((i) => i.severity === 'warning').length,
+    },
+  });
 });

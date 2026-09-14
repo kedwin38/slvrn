@@ -1029,6 +1029,430 @@ suite('HTTP routes', () => {
     });
   });
 
+  // =========================================================================
+  // Recipients
+  //
+  // Changing a recipient's phone number is the cheapest payment fraud in the product: no
+  // batch is touched and no approval is sought. These tests assert the controls that make
+  // it visible rather than silent.
+  // =========================================================================
+
+  describe('recipients', () => {
+    let recipientId = '';
+
+    it('normalises a local phone number to the payable 254 form', async () => {
+      const response = await call('/recipients', {
+        level: 'L1',
+        method: 'POST',
+        body: { fullName: 'Asha Wanjiru', msisdn: '0712345678' },
+      });
+      expect(response.status).toBe(201);
+      recipientId = ((await response.json()) as { recipient: { id: string } }).recipient.id;
+
+      const listed = await call('/recipients?search=Asha', { level: 'L1' });
+      const body = (await listed.json()) as { recipients: { msisdn: string }[] };
+      expect(body.recipients[0]!.msisdn).toBe('254712345678');
+    });
+
+    it('refuses a second master record for a number somebody already holds', async () => {
+      const response = await call('/recipients', {
+        level: 'L1',
+        method: 'POST',
+        body: { fullName: 'Someone Else', msisdn: '254712345678' },
+      });
+      expect(response.status).toBe(422);
+      const body = (await response.json()) as { error: { code: string; message: string } };
+      expect(body.error.code).toBe('RECIPIENT_MSISDN_EXISTS');
+      // Naming the holder is the point: "already exists" alone leaves the operator hunting.
+      expect(body.error.message).toContain('Asha Wanjiru');
+    });
+
+    it('refuses to change where somebody is paid without a recorded reason', async () => {
+      const response = await call(`/recipients/${recipientId}`, {
+        level: 'L1',
+        method: 'PATCH',
+        body: { msisdn: '254722000111' },
+      });
+      expect(response.status).toBe(422);
+      expect(((await response.json()) as { error: { code: string } }).error.code).toBe(
+        'RECIPIENT_MSISDN_REASON_REQUIRED',
+      );
+    });
+
+    it('records the old number, the new one and the reason, and raises a security event', async () => {
+      const response = await call(`/recipients/${recipientId}`, {
+        level: 'L1',
+        method: 'PATCH',
+        body: {
+          msisdn: '0722000111',
+          reason: 'Confirmed by phone with the employee after a SIM swap',
+        },
+      });
+      expect(response.status).toBe(200);
+      expect(
+        ((await response.json()) as { paymentDetailsChanged: boolean }).paymentDetailsChanged,
+      ).toBe(true);
+
+      const audit = await harness.sql<{ previous_state: unknown; new_state: unknown }[]>`
+        SELECT previous_state, new_state FROM audit_events
+         WHERE action = 'recipient.payment_details_changed' AND object_id = ${recipientId}
+      `;
+      expect(audit).toHaveLength(1);
+      expect(audit[0]!.previous_state).toMatchObject({ msisdn: '254712345678' });
+      expect(audit[0]!.new_state).toMatchObject({ msisdn: '254722000111' });
+
+      const events = await harness.sql<{ severity: string }[]>`
+        SELECT severity FROM security_events
+         WHERE event_type = 'RECIPIENT_PAYMENT_DETAILS_CHANGED'
+      `;
+      expect(events[0]!.severity).toBe('WARNING');
+    });
+
+    it('stamps payment_details_modified_at so the risk engine can see the change', async () => {
+      const rows = await harness.sql<{ recent: boolean }[]>`
+        SELECT payment_details_modified_at > now() - interval '1 minute' AS recent
+          FROM recipients WHERE id = ${recipientId}
+      `;
+      expect(rows[0]!.recent).toBe(true);
+    });
+
+    it('deactivates rather than deletes, so the payment history survives', async () => {
+      const response = await call(`/recipients/${recipientId}`, {
+        level: 'L1',
+        method: 'PATCH',
+        body: { status: 'INACTIVE' },
+      });
+      expect(response.status).toBe(200);
+      const rows = await harness.sql<{ status: string }[]>`
+        SELECT status FROM recipients WHERE id = ${recipientId}
+      `;
+      expect(rows[0]!.status).toBe('INACTIVE');
+    });
+
+    it('hides a recipient belonging to another organisation', async () => {
+      const response = await call('/recipients/00000000-0000-0000-0000-0000000000ff', {
+        level: 'L3',
+      });
+      expect(response.status).toBe(404);
+    });
+  });
+
+  // =========================================================================
+  // Reconciliation
+  //
+  // The rule under test is that a human cannot assert a payment succeeded. Everything else
+  // here is bookkeeping; that one refusal is the control.
+  // =========================================================================
+
+  describe('reconciliation', () => {
+    it('refuses the whole module to L1, who has no reconciliation authority', async () => {
+      expect((await call('/reconciliation/cases', { level: 'L1' })).status).toBe(403);
+      expect((await call('/reconciliation/summary', { level: 'L1' })).status).toBe(403);
+    });
+
+    it('reports an empty queue without inventing a case', async () => {
+      const response = await call('/reconciliation/summary', { level: 'L2' });
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as { outstanding: number; discrepancies: number };
+      expect(body.outstanding).toBe(0);
+      expect(body.discrepancies).toBe(0);
+    });
+
+    it('404s an unknown case rather than 500ing on a non-UUID id', async () => {
+      expect((await call('/reconciliation/cases/not-a-uuid', { level: 'L2' })).status).toBe(404);
+    });
+
+    it('offers no route to declaring a payment successful', async () => {
+      const response = await call(
+        '/reconciliation/cases/00000000-0000-0000-0000-0000000000aa/resolve',
+        {
+          level: 'L2',
+          method: 'POST',
+          body: { outcome: 'SUCCESS', note: 'I checked the portal and it paid' },
+        },
+      );
+      // 422 from schema validation, not 404: the outcome is rejected before the case is
+      // even looked up, because SUCCESS is not a value this endpoint accepts at all.
+      expect(response.status).toBe(422);
+    });
+  });
+
+  // =========================================================================
+  // Transaction retry
+  // =========================================================================
+
+  describe('transaction retry', () => {
+    it('is refused to L1, who cannot re-send a payment', async () => {
+      const response = await call(
+        '/payments/transactions/00000000-0000-0000-0000-0000000000bb/retry',
+        { level: 'L1', method: 'POST' },
+      );
+      expect(response.status).toBe(403);
+    });
+
+    it('404s an unknown transaction for an authorised caller', async () => {
+      const response = await call(
+        '/payments/transactions/00000000-0000-0000-0000-0000000000bb/retry',
+        { level: 'L2', method: 'POST' },
+      );
+      expect(response.status).toBe(404);
+    });
+  });
+
+  // =========================================================================
+  // Security centre
+  // =========================================================================
+
+  describe('security centre', () => {
+    it('is L3-only, at the data API and not merely in the navigation', async () => {
+      expect((await call('/admin/security/events', { level: 'L1' })).status).toBe(403);
+      expect((await call('/admin/security/events', { level: 'L2' })).status).toBe(403);
+      expect((await call('/admin/security/sessions', { level: 'L2' })).status).toBe(403);
+    });
+
+    it('shows L3 the events the platform recorded, with severity counts', async () => {
+      await harness.sql`
+        INSERT INTO security_events (organization_id, event_type, severity, description)
+        VALUES (${ORG}, 'TEST_CRITICAL', 'CRITICAL', 'Something worth waking up for')
+      `;
+      const response = await call('/admin/security/events?unacknowledgedOnly=true', {
+        level: 'L3',
+      });
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as {
+        events: { eventType: string; acknowledgedAt: string | null }[];
+        counts: { severity: string; open: number }[];
+      };
+      expect(body.events.some((e) => e.eventType === 'TEST_CRITICAL')).toBe(true);
+      expect(body.counts.find((c) => c.severity === 'CRITICAL')!.open).toBeGreaterThan(0);
+    });
+
+    it('records who reviewed an event, and never overwrites the first reviewer', async () => {
+      const rows = await harness.sql<{ id: string }[]>`
+        INSERT INTO security_events (organization_id, event_type, severity, description)
+        VALUES (${ORG}, 'TEST_ACKNOWLEDGE', 'WARNING', 'Needs a reviewer')
+        RETURNING id
+      `;
+      const first = await call('/admin/security/events/acknowledge', {
+        level: 'L3',
+        method: 'POST',
+        body: { eventIds: [rows[0]!.id], note: 'Reviewed, benign' },
+      });
+      expect(first.status).toBe(200);
+      expect(((await first.json()) as { acknowledged: number }).acknowledged).toBe(1);
+
+      // A second pass over the list must not re-stamp it under a later reviewer.
+      const second = await call('/admin/security/events/acknowledge', {
+        level: 'L3',
+        method: 'POST',
+        body: { eventIds: [rows[0]!.id] },
+      });
+      expect(((await second.json()) as { acknowledged: number }).acknowledged).toBe(0);
+    });
+
+    it('lists live sessions and refuses to revoke one that is already gone', async () => {
+      const response = await call('/admin/security/sessions', { level: 'L3' });
+      const body = (await response.json()) as { sessions: { email: string }[] };
+      expect(body.sessions.some((s) => s.email === 'l3@route.test')).toBe(true);
+
+      const missing = await call(
+        '/admin/security/sessions/00000000-0000-0000-0000-0000000000cc/revoke',
+        { level: 'L3', method: 'POST' },
+      );
+      expect(missing.status).toBe(404);
+    });
+  });
+
+  // =========================================================================
+  // Reports
+  //
+  // The catalogue is the authority decision. If it leaked a family the caller cannot
+  // generate, the console would offer a button that always fails.
+  // =========================================================================
+
+  describe('reports', () => {
+    it('offers each level only the families it may generate', async () => {
+      const families = async (level: AuthorityLevel) => {
+        const response = await call('/reports', { level });
+        const body = (await response.json()) as { reports: { family: string }[] };
+        return body.reports.map((r) => r.family);
+      };
+
+      const l1 = await families('L1');
+      expect(l1).toContain('payment');
+      expect(l1).not.toContain('payroll');
+      expect(l1).not.toContain('executive');
+
+      const l2 = await families('L2');
+      expect(l2).toContain('payroll');
+      expect(l2).not.toContain('executive');
+
+      expect(await families('L3')).toContain('executive');
+    });
+
+    it('refuses a family the caller may not generate, whatever the catalogue showed', async () => {
+      expect(
+        (await call('/reports/executive?from=2026-09-01&to=2026-09-30', { level: 'L2' })).status,
+      ).toBe(403);
+      expect(
+        (await call('/reports/payroll?from=2026-09-01&to=2026-09-30', { level: 'L1' })).status,
+      ).toBe(403);
+    });
+
+    it('404s a report family that does not exist', async () => {
+      expect(
+        (await call('/reports/invented?from=2026-09-01&to=2026-09-30', { level: 'L3' })).status,
+      ).toBe(404);
+    });
+
+    it('refuses a period that ends before it starts', async () => {
+      const response = await call('/reports/payment?from=2026-09-30&to=2026-09-01', {
+        level: 'L1',
+      });
+      expect(response.status).toBe(422);
+    });
+
+    it('includes the final day of a bare-date period', async () => {
+      const response = await call('/reports/payment?from=2026-09-01&to=2026-09-30', {
+        level: 'L1',
+      });
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as { report: { periodTo: string } };
+      // Exclusive at the SQL level, so the 30th is inside the period rather than dropped.
+      expect(body.report.periodTo).toBe('2026-10-01T00:00:00.000Z');
+    });
+
+    it('records generation in export_records even when nothing is downloaded', async () => {
+      await call('/reports/financial?from=2026-09-01&to=2026-09-30', { level: 'L3' });
+      const rows = await harness.sql<{ export_type: string; status: string }[]>`
+        SELECT export_type, status FROM export_records
+         WHERE organization_id = ${ORG} AND filter_json->>'family' = 'financial'
+      `;
+      expect(rows[0]!.export_type).toBe('MANAGEMENT');
+      expect(rows[0]!.status).toBe('COMPLETED');
+    });
+
+    it('computes every family in the catalogue without an error', async () => {
+      // Each family is its own SQL query against the ledger. A family that throws only when
+      // somebody selects it at month end is a report that does not exist.
+      const catalogue = (await (await call('/reports', { level: 'L3' })).json()) as {
+        reports: { family: string; title: string }[];
+      };
+      expect(catalogue.reports).toHaveLength(12);
+
+      for (const entry of catalogue.reports) {
+        const response = await call(`/reports/${entry.family}?from=2026-09-01&to=2026-09-30`, {
+          level: 'L3',
+        });
+        expect(response.status, `${entry.family} failed`).toBe(200);
+        const body = (await response.json()) as {
+          report: {
+            title: string;
+            sections: { title: string; columns: unknown[] }[];
+            highlights: unknown[];
+          };
+        };
+        expect(body.report.title).toBe(entry.title);
+        expect(body.report.sections.length).toBeGreaterThan(0);
+        for (const section of body.report.sections) {
+          expect(section.columns.length).toBeGreaterThan(0);
+        }
+      }
+    });
+
+    it('renders every family as CSV too, so a report is never screen-only', async () => {
+      for (const family of [
+        'payment',
+        'financial',
+        'payroll',
+        'department',
+        'reconciliation',
+        'risk',
+        'audit',
+        'user-activity',
+        'system-activity',
+        'daraja',
+        'executive',
+        'ai-intelligence',
+      ]) {
+        const response = await call(`/reports/${family}?from=2026-09-01&to=2026-09-30&format=csv`, {
+          level: 'L3',
+        });
+        expect(response.status, `${family} CSV failed`).toBe(200);
+        expect(await response.text()).toContain('# Period: 2026-09-01');
+      }
+    });
+
+    it('compares the executive period against the span immediately before it', async () => {
+      const response = await call('/reports/executive?from=2026-09-01&to=2026-09-30', {
+        level: 'L3',
+      });
+      const body = (await response.json()) as {
+        report: { sections: { title: string; rows: Record<string, unknown>[] }[] };
+      };
+      const comparison = body.report.sections.find((s) => s.title === 'Period comparison');
+      expect(comparison).toBeDefined();
+      expect(comparison!.rows.map((r) => r.metric)).toContain('Disbursed (KES)');
+
+      const control = body.report.sections.find((s) => s.title === 'Control posture');
+      // Named, not just counted: an executive reading "3" needs to know three of what.
+      expect(control!.rows.map((r) => r.item)).toContain('Open reconciliation cases');
+    });
+
+    it('serves CSV with a filename and a provenance header', async () => {
+      const response = await call('/reports/payment?from=2026-09-01&to=2026-09-30&format=csv', {
+        level: 'L1',
+      });
+      expect(response.status).toBe(200);
+      expect(response.headers.get('Content-Type')).toContain('text/csv');
+      expect(response.headers.get('Content-Disposition')).toContain('report_payment_route-test');
+      const csv = await response.text();
+      expect(csv).toContain('# Generated by:');
+      expect(csv).toContain('# Period: 2026-09-01');
+    });
+  });
+
+  // =========================================================================
+  // Action queue
+  // =========================================================================
+
+  describe('action queue', () => {
+    it('tells an L3 when no payment can run, because the credentials are missing or unhealthy', async () => {
+      const response = await call('/analytics/action-queue', { level: 'L3' });
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as {
+        items: { kind: string; severity: string; route: string }[];
+      };
+      // Either shape counts: the point is that an executive is never left to discover at
+      // release time that nothing could have been paid.
+      const item = body.items.find(
+        (i) => i.kind === 'DARAJA_NOT_CONFIGURED' || i.kind === 'DARAJA_UNHEALTHY',
+      );
+      expect(item).toBeDefined();
+      expect(item!.severity).toBe('critical');
+      // Every item names the screen that acts on it; a notice with nowhere to go is noise.
+      expect(item!.route).toBe('daraja');
+    });
+
+    it('does not tell an L1 about administration work they cannot do', async () => {
+      const response = await call('/analytics/action-queue', { level: 'L1' });
+      const body = (await response.json()) as { items: { kind: string }[] };
+      const kinds = body.items.map((i) => i.kind);
+      expect(kinds).not.toContain('DARAJA_NOT_CONFIGURED');
+      expect(kinds).not.toContain('SECURITY_EVENTS_UNACKNOWLEDGED');
+    });
+
+    it('sorts the most serious first, so the critical item is never below the fold', async () => {
+      const response = await call('/analytics/action-queue', { level: 'L3' });
+      const body = (await response.json()) as { items: { severity: string }[] };
+      const rank = { critical: 0, warning: 1, info: 2 } as const;
+      const severities = body.items.map((i) => rank[i.severity as keyof typeof rank]);
+      for (let i = 1; i < severities.length; i++) {
+        expect(severities[i]!).toBeGreaterThanOrEqual(severities[i - 1]!);
+      }
+    });
+  });
+
   describe('health', () => {
     it('liveness reveals nothing about the deployment', async () => {
       const response = await call('/health');

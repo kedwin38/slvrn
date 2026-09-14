@@ -189,6 +189,7 @@ export function TransactionsExplorer({ capabilities, initialStatuses, initialBat
 
   const canExport = capabilities['transactions:export_failed'] === true;
   const canRefresh = capabilities['transactions:refresh_status'] === true;
+  const canRetry = capabilities['transactions:retry'] === true;
   const rows = data?.transactions ?? [];
 
   return (
@@ -395,6 +396,7 @@ export function TransactionsExplorer({ capabilities, initialStatuses, initialBat
                         )
                       }
                       canRefresh={canRefresh}
+                      canRetry={canRetry}
                       onRefreshed={load}
                     />
                   ))}
@@ -444,16 +446,21 @@ function TransactionRowView({
   expanded,
   onToggle,
   canRefresh,
+  canRetry,
   onRefreshed,
 }: {
   row: TransactionRow;
   expanded: boolean;
   onToggle: () => void;
   canRefresh: boolean;
+  canRetry: boolean;
   onRefreshed: () => void;
 }) {
   const [refreshing, setRefreshing] = useState(false);
   const [refreshMessage, setRefreshMessage] = useState<string | null>(null);
+  const [retrying, setRetrying] = useState(false);
+  const [retryMessage, setRetryMessage] = useState<string | null>(null);
+  const [confirmingRetry, setConfirmingRetry] = useState(false);
 
   const hasFailure = row.status === 'FAILED' || row.status === 'TIMEOUT';
   const detailId = `detail-${row.transactionId}`;
@@ -470,6 +477,27 @@ function TransactionRowView({
       );
     } finally {
       setRefreshing(false);
+    }
+  }
+
+  /**
+   * Re-send a failed payment.
+   *
+   * Confirmed explicitly rather than fired on one click. The server refuses a SUCCESS and
+   * refuses a permanent failure code, so a misclick cannot pay twice — but "this sends money
+   * again" deserves a beat of thought from the person pressing it, not a toast afterwards.
+   */
+  async function retry() {
+    setRetrying(true);
+    setConfirmingRetry(false);
+    try {
+      const result = await api.transactions.retry(row.transactionId);
+      setRetryMessage(result.message);
+      onRefreshed();
+    } catch (err) {
+      setRetryMessage(err instanceof ApiError ? err.message : 'The retry could not be requested.');
+    } finally {
+      setRetrying(false);
     }
   }
 
@@ -578,6 +606,60 @@ function TransactionRowView({
                     </span>
                   )}
                 </div>
+              )}
+
+              {canRetry && row.retryEligible && (
+                <div className="stack">
+                  {confirmingRetry ? (
+                    <Notice tone="warning">
+                      This sends KES {formatCents(row.amountCents)} to {row.msisdn} again. It is
+                      recorded as a new attempt against the same authorization, and M-PESA does not
+                      undo a payment once it is made.
+                      <div className="row" style={{ marginBlockStart: 'var(--s2)' }}>
+                        <button
+                          className="button button-sm"
+                          data-variant="primary"
+                          onClick={retry}
+                          disabled={retrying}
+                        >
+                          {retrying ? 'Sending…' : 'Yes, send it again'}
+                        </button>
+                        <button
+                          className="button button-sm"
+                          data-variant="ghost"
+                          onClick={() => setConfirmingRetry(false)}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </Notice>
+                  ) : (
+                    <div className="row">
+                      <button
+                        className="button button-sm"
+                        onClick={() => setConfirmingRetry(true)}
+                        disabled={retrying}
+                      >
+                        Retry this payment
+                      </button>
+                      <span className="small muted">
+                        This failure looks transient, so another attempt may succeed.
+                      </span>
+                    </div>
+                  )}
+                  {retryMessage && (
+                    <span className="small muted" role="status">
+                      {retryMessage}
+                    </span>
+                  )}
+                </div>
+              )}
+
+              {canRetry && row.status === 'FAILED' && !row.retryEligible && (
+                <Notice tone="info">
+                  This failure is permanent for this recipient and amount — retrying produces the
+                  same result. Correct the recipient or the amount in a new batch instead.
+                </Notice>
               )}
 
               {row.status === 'TIMEOUT' && (

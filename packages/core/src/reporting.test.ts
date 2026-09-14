@@ -4,9 +4,13 @@ import {
   escapeCsvField,
   exportFilename,
   FAILED_EXPORT_HEADERS,
+  renderReportCsv,
+  formatReportCell,
   type TransactionExportRow,
   type ExportMetadata,
+  type ReportDocument,
 } from './export-csv.js';
+import { instructionFingerprint } from './idempotency.js';
 import {
   explorerQuerySchema,
   buildOrderBy,
@@ -338,5 +342,147 @@ describe('risk assessment (§11)', () => {
     for (let i = 1; i < severities.length; i++) {
       expect(weights[severities[i]!]).toBeLessThanOrEqual(weights[severities[i - 1]!]);
     }
+  });
+});
+
+describe('report rendering (§12.1)', () => {
+  const metadata: ExportMetadata = {
+    exportId: 'EXP-2026-TEST',
+    organizationId: 'org-1',
+    generatedAt: '2026-09-14T08:00:00.000Z',
+    generatedByUserId: 'user-1',
+    generatedByLevel: 'L3',
+    filterDescription: 'Financial report',
+    rowCount: 2,
+  };
+
+  const report: ReportDocument = {
+    family: 'financial',
+    title: 'Financial report',
+    description: 'Disbursed and failed value for the period.',
+    periodFrom: '2026-09-01T00:00:00.000Z',
+    periodTo: '2026-10-01T00:00:00.000Z',
+    highlights: [{ label: 'Disbursed', value: 'KES 1,500.00' }],
+    sections: [
+      {
+        title: 'Daily movement',
+        columns: [
+          { key: 'day', label: 'Date' },
+          { key: 'paid', label: 'Disbursed (KES)', format: 'money' },
+        ],
+        rows: [
+          { day: '2026-09-01', paid: 100_000 },
+          { day: '2026-09-02', paid: 50_000 },
+        ],
+      },
+    ],
+    narrative: null,
+  };
+
+  it('prints the period on the artefact', () => {
+    const csv = renderReportCsv(report, metadata);
+    expect(csv).toContain('# Period: 2026-09-01T00:00:00.000Z to 2026-10-01T00:00:00.000Z');
+    expect(csv).toContain('# Disbursed: KES 1,500.00');
+  });
+
+  it('renders money columns in shillings, not cents, and quotes the thousands comma', () => {
+    const csv = renderReportCsv(report, metadata);
+    // Unquoted, "1,000.00" would split into two columns and shift every field after it.
+    expect(csv).toContain('2026-09-01,"1,000.00"');
+    expect(csv).toContain('2026-09-02,500.00');
+  });
+
+  it('separates each section with its own banner and header row', () => {
+    const csv = renderReportCsv(
+      {
+        ...report,
+        sections: [
+          ...report.sections,
+          {
+            title: 'By batch',
+            columns: [{ key: 'reference', label: 'Batch' }],
+            rows: [{ reference: 'SLV-2026-00001' }],
+          },
+        ],
+      },
+      metadata,
+    );
+    expect(csv).toContain('# Daily movement');
+    expect(csv).toContain('# By batch');
+    expect(csv).toContain('SLV-2026-00001');
+  });
+
+  it('says so when a section is empty rather than leaving a blank block', () => {
+    const csv = renderReportCsv(
+      { ...report, sections: [{ ...report.sections[0]!, rows: [] }] },
+      metadata,
+    );
+    expect(csv).toContain('# No rows for this section in the selected period.');
+  });
+
+  it('marks every line of AI narrative, so a pasted row keeps the warning (§12.2)', () => {
+    const csv = renderReportCsv(
+      {
+        ...report,
+        narrative: {
+          text: 'September rose against August.\nEngineering contributed most of it.',
+          source: 'AI_ADVISORY',
+          model: 'claude-test',
+        },
+      },
+      metadata,
+    );
+    const advisory = csv.split('\r\n').filter((line) => line.includes('AI ADVISORY'));
+    expect(advisory).toHaveLength(2);
+    for (const line of advisory) {
+      expect(line).toContain('not a computed figure');
+    }
+  });
+
+  it('keeps a multi-line description from breaking the comment header', () => {
+    const csv = renderReportCsv({ ...report, description: 'One\nTwo' }, metadata);
+    const headerLines = csv.split('\r\n').slice(0, 7);
+    expect(headerLines.every((line) => line.startsWith('#'))).toBe(true);
+    expect(csv).toContain('# One Two');
+  });
+
+  it('renders a null cell as empty and a money cell from a numeric string', () => {
+    expect(formatReportCell(null, 'money')).toBe('');
+    expect(formatReportCell(undefined, 'text')).toBe('');
+    expect(formatReportCell('250000', 'money')).toBe('2,500.00');
+    expect(formatReportCell('SLV-1', undefined)).toBe('SLV-1');
+    expect(formatReportCell(7, 'number')).toBe('7');
+  });
+});
+
+describe('retrying a failed payment carries a new fingerprint (§9.3)', () => {
+  const base = {
+    organizationId: 'org-1',
+    batchId: 'batch-1',
+    instructionId: 'ins-1',
+    batchVersion: 3,
+    msisdn: '254712345678',
+    amountCents: 150_000,
+    manifestHash: 'a'.repeat(64),
+  };
+
+  it('leaves the original execution fingerprint byte-identical', async () => {
+    const original = await instructionFingerprint(base);
+    // An absent retry sequence and an explicit zero must both mean "the first attempt",
+    // or an existing claim would stop matching after this field was added.
+    expect(await instructionFingerprint({ ...base, retrySequence: 0 })).toBe(original);
+  });
+
+  it('gives each deliberate re-attempt a distinct claim', async () => {
+    const original = await instructionFingerprint(base);
+    const first = await instructionFingerprint({ ...base, retrySequence: 1 });
+    const second = await instructionFingerprint({ ...base, retrySequence: 2 });
+    expect(new Set([original, first, second]).size).toBe(3);
+  });
+
+  it('is deterministic, so the same retry cannot be claimed twice', async () => {
+    expect(await instructionFingerprint({ ...base, retrySequence: 1 })).toBe(
+      await instructionFingerprint({ ...base, retrySequence: 1 }),
+    );
   });
 });

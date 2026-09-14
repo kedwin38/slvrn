@@ -24,6 +24,18 @@ export interface InstructionFingerprintInput {
   amountCents: number;
   /** Manifest hash that was authorized; binds execution to the signed intent. */
   manifestHash: string;
+  /**
+   * Which deliberate re-attempt this is, for an operator retrying a FAILED payment.
+   *
+   * Omitted (or 0) for the original execution, and the payload is then byte-identical to
+   * what it has always been — existing claims keep their fingerprints.
+   *
+   * A retry MUST carry a distinct fingerprint. Reusing the original would collide with the
+   * spent claim, the executor would read it as a replay of a payment already sent, and the
+   * retry would silently do nothing — the worst outcome, because the operator would believe
+   * the payment had been re-sent.
+   */
+  retrySequence?: number;
 }
 
 /**
@@ -44,6 +56,8 @@ export async function instructionFingerprint(input: InstructionFingerprintInput)
     input.msisdn,
     String(input.amountCents),
     input.manifestHash,
+    // Appended only for a retry, so the original execution's fingerprint is unchanged.
+    ...(input.retrySequence ? [`retry:${input.retrySequence}`] : []),
   ].join('\x1f');
   return sha256Hex(payload);
 }
