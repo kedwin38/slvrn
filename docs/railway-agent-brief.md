@@ -121,7 +121,10 @@ STEP 4 — Object storage (REQUIRED; the API will not boot without it)
 Railway has no S3 service, and the app needs one for encrypted backups.
 Pick ONE of these.
 
-OPTION A (preferred if the user already has Cloudflare R2):
+OPTION A (STRONGLY PREFERRED — the user already has Cloudflare R2 enabled):
+  Take this one unless there is a reason not to. It needs no extra service, no
+  volume, no image pull, and no TLS caveat.
+
   The user's Cloudflare account id is c3807a0785783519c7b9c174ede659ef.
   Ask them to create an R2 bucket named "solvaren-backups" and an R2 API token
   scoped to that bucket with read+write. Then:
@@ -132,9 +135,18 @@ OPTION A (preferred if the user already has Cloudflare R2):
     S3_SECRET_ACCESS_KEY = <R2 secret access key>
     S3_FORCE_PATH_STYLE  = false
 
-OPTION B (everything inside Railway):
-  Deploy MinIO as a third service in this project, from image
-  minio/minio:latest, command: server /data --console-address ":9001"
+OPTION B (everything inside Railway — only if Option A is unavailable):
+  Deploy MinIO as a third service in this project.
+
+  DO NOT use the tag `minio/minio:latest`. It has been observed failing on
+  Railway with "could not be pulled from the registry" — MinIO publishes dated
+  release tags, and anonymous Docker Hub pulls are also rate-limited. Look up a
+  current `RELEASE.*` tag on Docker Hub and pin it explicitly, e.g.
+  `minio/minio:RELEASE.<date>`. If the pull still fails, that is a registry or
+  rate-limit problem on Railway's side, not a configuration error — switch to
+  Option A rather than retrying.
+
+  Command: server /data --console-address ":9001"
   Give it a volume mounted at /data and set MINIO_ROOT_USER and
   MINIO_ROOT_PASSWORD. Create a bucket "solvaren-backups". Then:
     S3_ENDPOINT          = http://minio.railway.internal:9000
@@ -185,6 +197,18 @@ In the API deploy logs you should see, as JSON lines:
 
 If you see "SOLVAREN cannot start: the environment is not valid", the log lists
 exactly which variables are wrong. Fix those specific ones.
+
+READING A STARTUP FAILURE: if the BUILD log ends normally (image pushed) and
+the deploy shows only
+
+    Starting Container
+    Stopping Container
+
+a second or two apart, the build is fine and the process exited on purpose.
+That is the config validator. Its output is in the DEPLOY log, not the build
+log — look there, not at the build output. A crash loop with no message at all
+would be something else; a clean two-second exit is nearly always a missing or
+invalid variable.
 
 ================================================================
 DO NOT
