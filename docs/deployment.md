@@ -61,26 +61,26 @@ check fails the build if a secret is assigned a literal value in any Dockerfile,
 
 ### 4. API service variables
 
-| Variable                 | Example                                     | Notes                                                       |
-| ------------------------ | ------------------------------------------- | ----------------------------------------------------------- |
-| `DATABASE_URL`           | `${{Postgres.DATABASE_URL}}`                | Railway reference, private host                             |
-| `SESSION_SIGNING_KEY`    | _(generated)_                               | ≥ 32 chars, refused otherwise                               |
-| `SECRET_ENCRYPTION_KEY`  | _(generated)_                               | ≥ 32 chars, must differ from the above                      |
-| `CALLBACK_SHARED_SECRET` | _(generated)_                               | Daraja callback authentication (§9.4)                       |
-| `ENVIRONMENT`            | `production`                                | `development` \| `staging` \| `production`                  |
-| `APP_ORIGIN`             | `https://app.solvaren.example`              | Must match the console's public URL exactly                 |
-| `API_BASE_URL`           | `https://api.solvaren.example`              | Used to build provider callback URLs                        |
-| `WEBAUTHN_RP_ID`         | `solvaren.example`                          | Must equal the `APP_ORIGIN` host or be a registrable parent |
-| `DARAJA_ENVIRONMENT`     | `sandbox`                                   | `production` is refused unless `ENVIRONMENT=production`     |
-| `S3_ENDPOINT`            | `https://s3.eu-central-003.backblazeb2.com` |                                                             |
-| `S3_BUCKET`              | `solvaren-backups`                          |                                                             |
-| `S3_REGION`              | `auto`                                      |                                                             |
-| `S3_ACCESS_KEY_ID`       | _(from step 2)_                             |                                                             |
-| `S3_SECRET_ACCESS_KEY`   | _(from step 2)_                             |                                                             |
-| `S3_FORCE_PATH_STYLE`    | `false`                                     | `true` for MinIO                                            |
-| `AI_API_KEY`             | _(optional)_                                | Omit to disable the AI layer entirely                       |
-| `RUN_WORKERS`            | `true`                                      | `false` for a web-only replica                              |
-| `RUN_SCHEDULER`          | `true`                                      | Safe on every replica; advisory-locked                      |
+| Variable                 | Example                                           | Notes                                                                       |
+| ------------------------ | ------------------------------------------------- | --------------------------------------------------------------------------- |
+| `DATABASE_URL`           | `${{Postgres.DATABASE_PRIVATE_URL}}`              | **Private** URL — not `DATABASE_URL`, which is the public proxy             |
+| `SESSION_SIGNING_KEY`    | _(generated)_                                     | ≥ 32 chars, refused otherwise                                               |
+| `SECRET_ENCRYPTION_KEY`  | _(generated)_                                     | ≥ 32 chars, must differ from the above                                      |
+| `CALLBACK_SHARED_SECRET` | _(generated)_                                     | Daraja callback authentication (§9.4)                                       |
+| `ENVIRONMENT`            | `production`                                      | `development` \| `staging` \| `production`                                  |
+| `APP_ORIGIN`             | `https://${{solvaren-web.RAILWAY_PUBLIC_DOMAIN}}` | Must match the console's public URL exactly; the reference keeps it in step |
+| `API_BASE_URL`           | `https://api.solvaren.example`                    | Used to build provider callback URLs                                        |
+| `WEBAUTHN_RP_ID`         | `${{solvaren-web.RAILWAY_PUBLIC_DOMAIN}}`         | Must equal the `APP_ORIGIN` host or be a registrable parent                 |
+| `DARAJA_ENVIRONMENT`     | `sandbox`                                         | `production` is refused unless `ENVIRONMENT=production`                     |
+| `S3_ENDPOINT`            | `https://s3.eu-central-003.backblazeb2.com`       |                                                                             |
+| `S3_BUCKET`              | `solvaren-backups`                                |                                                                             |
+| `S3_REGION`              | `auto`                                            |                                                                             |
+| `S3_ACCESS_KEY_ID`       | _(from step 2)_                                   |                                                                             |
+| `S3_SECRET_ACCESS_KEY`   | _(from step 2)_                                   |                                                                             |
+| `S3_FORCE_PATH_STYLE`    | `false`                                           | `true` for MinIO                                                            |
+| `AI_API_KEY`             | _(optional)_                                      | Omit to disable the AI layer entirely                                       |
+| `RUN_WORKERS`            | `true`                                            | `false` for a web-only replica                                              |
+| `RUN_SCHEDULER`          | `true`                                            | Safe on every replica; advisory-locked                                      |
 
 `PORT` is injected by Railway. Do not set it.
 
