@@ -10,6 +10,12 @@ WORKDIR /repo
 
 RUN corepack enable
 
+# pnpm refuses to remove a modules directory without a TTY, which makes the production
+# prune below fail inside a container with:
+#   ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY
+# CI=true is pnpm's documented non-interactive switch. Set once, before any install.
+ENV CI=true
+
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
 COPY packages/core/package.json packages/core/
 COPY packages/daraja/package.json packages/daraja/
