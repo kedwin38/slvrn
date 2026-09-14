@@ -84,6 +84,11 @@ COPY scripts/predeploy.mjs ./scripts/predeploy.mjs
 # ENVIRONMENT=production unless explicitly overridden. See the script's own header.
 COPY scripts/seed-demo.mjs ./scripts/seed-demo.mjs
 
+# Run by hand to let a new L2/L3 account enrol its first authenticator. Without it in the
+# image there is no way to bootstrap an executive account on a deployed system, and L3 is
+# the only level that can release a payment.
+COPY scripts/issue-enrolment-token.mjs ./scripts/issue-enrolment-token.mjs
+
 USER solvaren
 
 EXPOSE 8080
