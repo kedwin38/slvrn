@@ -172,6 +172,8 @@ async function main() {
       ['/reports', 'reporting'],
       ['/admin/security/events', 'security centre'],
       ['/analytics/action-queue', 'the action queue'],
+      ['/admin/conflicts', 'the conflict-of-interest registry'],
+      ['/ai/briefing', 'the intelligence layer'],
     ];
 
     for (const [path, label] of guarded) {
@@ -211,6 +213,12 @@ async function main() {
         ['Recipients', 'recipient master data'],
         ['Security centre', 'security centre'],
         ['Reports', 'reporting'],
+        ['Intelligence', 'the intelligence screen'],
+        ['Conflicts of interest', 'the conflict registry'],
+        // The gap that made the whole hierarchy undeliverable: a draft with no way to
+        // resume it, and no Level 2 decision anywhere in the console.
+        ['Submit to Finance Control', 'draft resumption'],
+        ['Approve for release', 'the Level 2 review stage'],
       ]) {
         record(all.includes(needle), `the console ships the ${label} screen`, needle);
       }

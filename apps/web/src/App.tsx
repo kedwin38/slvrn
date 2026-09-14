@@ -27,6 +27,7 @@ import { ReconciliationPage } from './pages/Reconciliation.js';
 import { RecipientsPage } from './pages/Recipients.js';
 import { SecurityCentrePage } from './pages/SecurityCentre.js';
 import { ReportsPage } from './pages/Reports.js';
+import { IntelligencePage } from './pages/Intelligence.js';
 import { ActionQueue } from './components/ActionQueue.js';
 import { Notice } from './components/primitives.js';
 
@@ -37,6 +38,7 @@ type Route =
   | 'reconciliation'
   | 'recipients'
   | 'reports'
+  | 'intelligence'
   | 'backups'
   | 'members'
   | 'daraja'
@@ -82,6 +84,13 @@ const NAVIGATION: NavEntry[] = [
     label: 'Recipients',
     icon: '☷',
     requires: 'recipients:read',
+    group: 'Operations',
+  },
+  {
+    route: 'intelligence',
+    label: 'Intelligence',
+    icon: '◈',
+    requires: 'ai:batch_analysis',
     group: 'Operations',
   },
   {
@@ -290,6 +299,7 @@ export function App() {
         {route === 'reconciliation' && <ReconciliationPage capabilities={capabilities} />}
         {route === 'recipients' && <RecipientsPage capabilities={capabilities} />}
         {route === 'reports' && <ReportsPage />}
+        {route === 'intelligence' && <IntelligencePage capabilities={capabilities} />}
         {route === 'security-centre' && <SecurityCentrePage />}
         {route === 'backups' && <BackupsPage />}
         {route === 'members' && <UsersPage />}

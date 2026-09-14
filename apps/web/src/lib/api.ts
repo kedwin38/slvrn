@@ -1022,6 +1022,40 @@ export const api = {
     },
   },
 
+  /*
+   * The conflict-of-interest registry. `assertNoDeclaredConflict` has barred conflicted
+   * approvers at every release since the first commit, against a table nothing could write
+   * to — a real control that no one could actually use.
+   */
+  conflicts: {
+    list: () =>
+      request<{
+        conflicts: {
+          id: string;
+          userName: string;
+          email: string;
+          scopeType: string;
+          scopeId: string | null;
+          scopeName: string | null;
+          reason: string;
+          declaredAt: string;
+          declaredBy: string | null;
+          withdrawnAt: string | null;
+        }[];
+      }>('/admin/conflicts'),
+    declare: (body: {
+      userId: string;
+      scopeType: 'RECIPIENT' | 'DEPARTMENT' | 'ORGANIZATION';
+      scopeId?: string | null;
+      reason: string;
+    }) => request<{ conflict: { id: string } }>('/admin/conflicts', { method: 'POST', body }),
+    withdraw: (id: string, reason: string) =>
+      request<{ withdrawn: boolean }>(`/admin/conflicts/${id}/withdraw`, {
+        method: 'POST',
+        body: { reason },
+      }),
+  },
+
   security: {
     events: (params: URLSearchParams) =>
       request<{
@@ -1190,6 +1224,62 @@ export const api = {
         method: 'POST',
         body: JSON.stringify(body),
       }),
+  },
+
+  /*
+   * The AI layer, which had four working endpoints and nothing calling any of them.
+   *
+   * Every response separates computed figures from generated narrative, and the console
+   * must keep them apart on screen too — §11 forbids an advisory signal being mistaken for
+   * a deterministic result, and a model's guess rendered like a figure is how that happens.
+   */
+  ai: {
+    analyseBatch: (batchId: string) =>
+      request<{
+        deterministicFindings: RiskSignalView[];
+        riskScore: number | null;
+        riskBand: string | null;
+        narrative: string | null;
+        degraded: boolean;
+        degradedReason: string | null;
+        advisoryNotice: string;
+      }>(`/ai/batches/${batchId}/analyse`, { method: 'POST' }),
+
+    explainFailure: (failureCode: string, transactionId?: string) =>
+      request<{
+        failureCode: string;
+        failureReason: string;
+        failureClass: string;
+        operatorAction: string;
+        transient: boolean;
+        mapped: boolean;
+        narrative: string | null;
+        advisoryNotice: string;
+      }>('/ai/failures/explain', {
+        method: 'POST',
+        body: { failureCode, transactionId },
+      }),
+
+    askExpenditure: (question: string) =>
+      request<{
+        question: string;
+        data: { cycles: { period: string; totalCents: number; recipientCount: number }[] };
+        narrative: string | null;
+        degraded: boolean;
+        advisoryNotice: string;
+      }>('/ai/analysis/expenditure', { method: 'POST', body: { question } }),
+
+    briefing: () =>
+      request<{
+        briefing: string | null;
+        degraded: boolean;
+        figures: {
+          monthlyDisbursements: { period: string; totalCents: number }[];
+          unresolvedReconciliationCases: number;
+          topFailureReasons: { reason: string; count: number }[];
+        };
+        advisoryNotice: string;
+      }>('/ai/briefing', { method: 'POST' }),
   },
 
   reports: {

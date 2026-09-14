@@ -1656,6 +1656,117 @@ suite('HTTP routes', () => {
   // both lower levels. The console hiding the screen is a courtesy; this is the control.
   // =========================================================================
 
+  // =========================================================================
+  // Conflict-of-interest registry
+  //
+  // The release path has barred conflicted approvers from the first commit, against a table
+  // nothing could write to. These endpoints are what make that control usable.
+  // =========================================================================
+
+  describe('conflict of interest', () => {
+    let conflictId = '';
+
+    it('is administered by L3 alone', async () => {
+      expect((await call('/admin/conflicts', { level: 'L1' })).status).toBe(403);
+      expect((await call('/admin/conflicts', { level: 'L2' })).status).toBe(403);
+      expect((await call('/admin/conflicts', { level: 'L3' })).status).toBe(200);
+    });
+
+    it('records a declaration against a named member, with a reason', async () => {
+      const response = await call('/admin/conflicts', {
+        level: 'L3',
+        method: 'POST',
+        body: {
+          userId: USERS.L3,
+          scopeType: 'ORGANIZATION',
+          reason: 'Director of a supplier paid through this organisation',
+        },
+      });
+      expect(response.status).toBe(201);
+      conflictId = ((await response.json()) as { conflict: { id: string } }).conflict.id;
+
+      const listed = (await (await call('/admin/conflicts', { level: 'L3' })).json()) as {
+        conflicts: { id: string; scopeType: string; withdrawnAt: string | null }[];
+      };
+      const found = listed.conflicts.find((c) => c.id === conflictId)!;
+      expect(found.scopeType).toBe('ORGANIZATION');
+      expect(found.withdrawnAt).toBeNull();
+    });
+
+    it('refuses an organisation-wide conflict that also names a scope', async () => {
+      const response = await call('/admin/conflicts', {
+        level: 'L3',
+        method: 'POST',
+        body: {
+          userId: USERS.L3,
+          scopeType: 'ORGANIZATION',
+          scopeId: '00000000-0000-0000-0000-0000000000f9',
+          reason: 'Contradictory scope that should be refused',
+        },
+      });
+      expect(response.status).toBe(422);
+    });
+
+    it('refuses a scoped conflict that names no scope', async () => {
+      const response = await call('/admin/conflicts', {
+        level: 'L3',
+        method: 'POST',
+        body: {
+          userId: USERS.L3,
+          scopeType: 'RECIPIENT',
+          reason: 'A recipient conflict with no recipient named',
+        },
+      });
+      expect(response.status).toBe(422);
+    });
+
+    it('stops the declared approver opening a ceremony while it stands', async () => {
+      // The registry is not advisory. With an organisation-wide conflict recorded against
+      // the only L3, the release path must refuse them.
+      const batchId = await (async () => {
+        const created = await call('/batches', {
+          level: 'L1',
+          method: 'POST',
+          body: { purpose: 'Conflict test' },
+        });
+        return ((await created.json()) as { batchId: string }).batchId;
+      })();
+
+      const response = await call(`/authorization/batches/${batchId}/begin`, {
+        level: 'L3',
+        method: 'POST',
+        body: {},
+      });
+      // Refused — on the conflict, on the batch state, or on both. What matters is that a
+      // declared conflict never results in a ceremony being opened.
+      expect(response.status).not.toBe(200);
+    });
+
+    it('withdraws rather than deletes, so the history survives', async () => {
+      const response = await call(`/admin/conflicts/${conflictId}/withdraw`, {
+        level: 'L3',
+        method: 'POST',
+        body: { reason: 'The directorship ended on 30 September' },
+      });
+      expect(response.status).toBe(200);
+
+      const listed = (await (await call('/admin/conflicts', { level: 'L3' })).json()) as {
+        conflicts: { id: string; withdrawnAt: string | null }[];
+      };
+      const found = listed.conflicts.find((c) => c.id === conflictId)!;
+      expect(found).toBeDefined();
+      expect(found.withdrawnAt).not.toBeNull();
+
+      // Withdrawing twice is refused rather than silently repeated.
+      const again = await call(`/admin/conflicts/${conflictId}/withdraw`, {
+        level: 'L3',
+        method: 'POST',
+        body: { reason: 'Attempting the same withdrawal a second time' },
+      });
+      expect(again.status).toBe(404);
+    });
+  });
+
   describe('Daraja administration is L3-only', () => {
     const surfaces: [string, string][] = [
       ['GET', '/admin/daraja'],

@@ -1663,3 +1663,191 @@ adminRoutes.post(
     return c.json({ revoked: true });
   },
 );
+
+// ---------------------------------------------------------------------------
+// Conflict-of-interest registry (L3 ONLY — spec "Essentials extras", SoD)
+// ---------------------------------------------------------------------------
+
+/**
+ * A declared conflict bars an approver from authorizing payments in its scope, and
+ * `assertNoDeclaredConflict` has enforced that at every release since the first commit —
+ * against a table nothing could write to. The control was real and unreachable: an executive
+ * who is a director of a supplier, or is related to an employee, had no way to say so.
+ *
+ * Declaring one is deliberately not self-service in the ordinary sense: an L3 may record a
+ * conflict for themselves or for another approver, because the point of the registry is that
+ * the organisation knows, not that the individual remembers. Withdrawal is a separate,
+ * audited act rather than a delete, so the history of who was barred from what survives.
+ */
+
+const conflictSchema = z.object({
+  userId: z.string().uuid(),
+  scopeType: z.enum(['RECIPIENT', 'DEPARTMENT', 'ORGANIZATION']),
+  scopeId: z.string().uuid().nullish(),
+  reason: z.string().trim().min(10).max(500),
+});
+
+adminRoutes.get(
+  '/conflicts',
+  requireExactLevel('L3'),
+  requirePermissions('admin:policies'),
+  async (c) => {
+    const actor = actorOf(c);
+    const conflicts = await withConnection(c.env, async (sql) => {
+      const rows = await sql<
+        {
+          id: string;
+          user_name: string;
+          email: string;
+          scope_type: string;
+          scope_id: string | null;
+          scope_name: string | null;
+          reason: string;
+          declared_at: string;
+          declared_by: string | null;
+          withdrawn_at: string | null;
+        }[]
+      >`
+        SELECT cr.id, u.full_name AS user_name, u.email, cr.scope_type, cr.scope_id,
+               COALESCE(r.full_name, d.name) AS scope_name,
+               cr.reason, cr.declared_at, cr.withdrawn_at,
+               declarer.full_name AS declared_by
+          FROM conflict_registrations cr
+          JOIN users u              ON u.id = cr.user_id
+          LEFT JOIN users declarer  ON declarer.id = cr.declared_by_user_id
+          LEFT JOIN recipients r    ON r.id = cr.scope_id AND cr.scope_type = 'RECIPIENT'
+          LEFT JOIN departments d   ON d.id = cr.scope_id AND cr.scope_type = 'DEPARTMENT'
+         WHERE cr.organization_id = ${actor.organizationId}
+         ORDER BY cr.withdrawn_at NULLS FIRST, cr.declared_at DESC
+      `;
+      return rows.map((row) => ({
+        id: row.id,
+        userName: row.user_name,
+        email: row.email,
+        scopeType: row.scope_type,
+        scopeId: row.scope_id,
+        scopeName: row.scope_name,
+        reason: row.reason,
+        declaredAt: row.declared_at,
+        declaredBy: row.declared_by,
+        withdrawnAt: row.withdrawn_at,
+      }));
+    });
+    return c.json({ conflicts });
+  },
+);
+
+adminRoutes.post(
+  '/conflicts',
+  requireExactLevel('L3'),
+  requirePermissions('admin:policies'),
+  async (c) => {
+    const actor = actorOf(c);
+    const body = conflictSchema.parse(await c.req.json());
+    const correlationId = c.get('correlationId');
+
+    if (body.scopeType === 'ORGANIZATION' && body.scopeId) {
+      throw validationError(
+        'CONFLICT_SCOPE_INVALID',
+        'An organisation-wide conflict covers everything, so it takes no specific scope.',
+      );
+    }
+    if (body.scopeType !== 'ORGANIZATION' && !body.scopeId) {
+      throw validationError(
+        'CONFLICT_SCOPE_REQUIRED',
+        `Name the ${body.scopeType.toLowerCase()} this conflict applies to.`,
+      );
+    }
+
+    const created = await withConnection(c.env, (sql) =>
+      inTransaction(sql, async (tx) => {
+        const subject = await tx<{ id: string; full_name: string }[]>`
+          SELECT id, full_name FROM users
+           WHERE id = ${body.userId} AND organization_id = ${actor.organizationId}
+        `;
+        if (!subject[0]) throw notFoundError('USER_NOT_FOUND', 'That member could not be found');
+
+        const rows = await tx<{ id: string }[]>`
+          INSERT INTO conflict_registrations (
+            organization_id, user_id, scope_type, scope_id, reason, declared_by_user_id
+          ) VALUES (
+            ${actor.organizationId}, ${body.userId}, ${body.scopeType},
+            ${body.scopeId ?? null}, ${body.reason}, ${actor.userId}
+          )
+          RETURNING id
+        `;
+
+        await writeAuditEvent(tx, {
+          organizationId: actor.organizationId,
+          actorId: actor.userId,
+          actorLevel: actor.level,
+          eventClass: 'AUTHORITY',
+          action: 'conflict.declared',
+          objectType: 'ConflictRegistration',
+          objectId: rows[0]!.id,
+          outcome: 'SUCCESS',
+          newState: {
+            userId: body.userId,
+            scopeType: body.scopeType,
+            scopeId: body.scopeId ?? null,
+          },
+          correlationId,
+          securityContext: c.get('securityContext'),
+          detail: { subject: subject[0].full_name, reason: body.reason },
+        });
+        return rows[0]!;
+      }),
+    );
+
+    return c.json({ conflict: { id: created.id } }, 201);
+  },
+);
+
+adminRoutes.post(
+  '/conflicts/:id/withdraw',
+  requireExactLevel('L3'),
+  requirePermissions('admin:policies'),
+  async (c) => {
+    const actor = actorOf(c);
+    const conflictId = c.req.param('id');
+    const correlationId = c.get('correlationId');
+    const body = z
+      .object({ reason: z.string().trim().min(10).max(500) })
+      .parse(await c.req.json().catch(() => ({})));
+
+    await withConnection(c.env, (sql) =>
+      inTransaction(sql, async (tx) => {
+        // Withdrawn, never deleted: who was barred from authorizing what, and when that
+        // stopped, is exactly the question an investigation asks afterwards.
+        const rows = await tx<{ id: string; user_id: string }[]>`
+          UPDATE conflict_registrations SET withdrawn_at = now()
+           WHERE id = ${conflictId} AND organization_id = ${actor.organizationId}
+             AND withdrawn_at IS NULL
+          RETURNING id, user_id
+        `;
+        const row = rows[0];
+        if (!row) {
+          throw notFoundError(
+            'CONFLICT_NOT_FOUND',
+            'That declaration could not be found, or it has already been withdrawn',
+          );
+        }
+        await writeAuditEvent(tx, {
+          organizationId: actor.organizationId,
+          actorId: actor.userId,
+          actorLevel: actor.level,
+          eventClass: 'AUTHORITY',
+          action: 'conflict.withdrawn',
+          objectType: 'ConflictRegistration',
+          objectId: conflictId,
+          outcome: 'SUCCESS',
+          correlationId,
+          securityContext: c.get('securityContext'),
+          detail: { targetUserId: row.user_id, reason: body.reason },
+        });
+      }),
+    );
+
+    return c.json({ withdrawn: true });
+  },
+);
