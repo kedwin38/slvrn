@@ -128,19 +128,32 @@ export function RecipientsPage({
         </Notice>
       )}
 
-      <div className="card">
-        <div className="card-body" style={{ display: 'flex', gap: 'var(--s3)', flexWrap: 'wrap' }}>
+      {/*
+        The shared filter bar, as on Transactions and the audit trail. These controls were a
+        plain flex row in a card, but .input is width:100%, so the status select claimed the
+        whole line and wrapped beneath the search box — two full-width controls stacked where
+        the rest of the console puts a row.
+      */}
+      <div className="filter-bar">
+        <div className="filter-field" style={{ flex: '2 1 240px' }}>
+          <label className="label" htmlFor="recipient-search">
+            Search
+          </label>
           <input
+            id="recipient-search"
             className="input"
-            placeholder="Search name, number or reference"
-            aria-label="Search recipients"
+            placeholder="Name, number or reference"
             value={search}
             onChange={(event) => setSearch(event.target.value)}
-            style={{ flex: '1 1 240px' }}
           />
+        </div>
+        <div className="filter-field">
+          <label className="label" htmlFor="recipient-status">
+            Status
+          </label>
           <select
+            id="recipient-status"
             className="input"
-            aria-label="Filter by status"
             value={statusFilter}
             onChange={(event) => setStatusFilter(event.target.value)}
           >
@@ -205,7 +218,7 @@ export function RecipientsPage({
                       <RelativeTime value={recipient.paymentDetailsModifiedAt} />
                     </td>
                     <td>
-                      <div style={{ display: 'flex', gap: 'var(--s2)', flexWrap: 'wrap' }}>
+                      <div className="row-actions">
                         <button
                           className="button button-sm"
                           data-variant="ghost"

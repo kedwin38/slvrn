@@ -204,7 +204,7 @@ export function ReconciliationPage({
                       </td>
                       <td>
                         {canResolve && open ? (
-                          <div style={{ display: 'flex', gap: 'var(--s2)', flexWrap: 'wrap' }}>
+                          <div className="row-actions">
                             <button
                               className="button button-sm"
                               data-variant="ghost"

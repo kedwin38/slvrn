@@ -104,7 +104,7 @@ export function ReportsPage({ user }: { user: SessionResponse['user'] }) {
       <div className="card screen-only">
         <div className="card-body stack">
           <div style={{ display: 'flex', gap: 'var(--s3)', flexWrap: 'wrap', alignItems: 'end' }}>
-            <div style={{ flex: '1 1 260px' }}>
+            <div style={{ flex: '0 1 22rem' }}>
               <Field label="Report">
                 {(props) => (
                   <select

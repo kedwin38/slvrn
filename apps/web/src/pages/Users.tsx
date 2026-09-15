@@ -183,7 +183,7 @@ export function UsersPage() {
                         <RelativeTime value={user.lastLoginAt} />
                       </td>
                       <td>
-                        <div style={{ display: 'flex', gap: 'var(--s2)', flexWrap: 'wrap' }}>
+                        <div className="row-actions">
                           {/*
                             Controlled administrative recovery (§11). Before this the only
                             remedy for a forgotten password was editing the database by

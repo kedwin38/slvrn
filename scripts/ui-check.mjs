@@ -79,11 +79,324 @@ const server = createServer((req, res) => {
             'reports:operational': true,
             'reports:management': true,
             'reports:executive': true,
+            'reconciliation:read': true,
+            'reconciliation:resolve': true,
+            'recipients:read': true,
+            'recipients:write': true,
+            'departments:read': true,
+            'departments:write': true,
+            'admin:users': true,
+            'admin:policies': true,
+            'admin:security': true,
+            'audit:read_full': true,
+            'audit:read_org': true,
+            'analytics:advanced': true,
+            'analytics:executive': true,
+            'ai:batch_analysis': true,
+            'ai:financial_analysis': true,
+            'ai:executive_intelligence': true,
           },
         }),
       );
     if (url.pathname === '/api/admin/daraja')
       return res.end(JSON.stringify({ configurations: [] }));
+    /*
+     * Fixtures for the remaining authenticated screens. These existed as routes and were
+     * never captured, so eight of the console's fifteen screens had never been looked at in
+     * a browser at all — which is how an unstyled control or a broken empty state survives.
+     */
+    if (url.pathname === '/api/reconciliation/summary')
+      return res.end(
+        JSON.stringify({
+          open: 2,
+          discrepancies: 1,
+          resolvedToday: 4,
+          oldestOpenedAt: '2026-09-13T06:20:00.000Z',
+        }),
+      );
+    if (url.pathname === '/api/reconciliation/cases')
+      return res.end(
+        JSON.stringify({
+          cases: [
+            {
+              caseId: 'rc1',
+              caseReference: 'REC-2026-0041',
+              state: 'OPEN',
+              openedReason: 'The provider did not answer within the timeout window',
+              discrepancy: true,
+              queryAttempts: 3,
+              nextQueryAt: '2026-09-15T10:00:00.000Z',
+              openedAt: '2026-09-13T06:20:00.000Z',
+              resolvedAt: null,
+              resolvedBy: null,
+              resolutionNote: null,
+              evidence: null,
+              transaction: {
+                transactionId: 't1',
+                status: 'TIMEOUT',
+                statusTone: 'warning',
+                failureCode: null,
+                failureReason: null,
+                providerResultDescription: null,
+                mpesaReceiptNumber: null,
+                originatorConversationId: '600992-INS2-7B2Q',
+                conversationId: 'AG_20260913_2011',
+                amountCents: 12000000,
+                recipientName: 'Grace Achieng',
+                msisdn: '254799889888',
+                batchId: 'b1',
+                batchReference: 'SLV-2026-00981',
+              },
+            },
+          ],
+          nextCursor: null,
+        }),
+      );
+    if (url.pathname === '/api/recipients/departments')
+      return res.end(
+        JSON.stringify({
+          departments: [
+            {
+              id: 'd1',
+              name: 'Engineering',
+              code: 'ENG',
+              status: 'ACTIVE',
+              monthlyBudgetCents: 400000000,
+              recipientCount: 24,
+            },
+            {
+              id: 'd2',
+              name: 'Operations',
+              code: 'OPS',
+              status: 'ACTIVE',
+              monthlyBudgetCents: null,
+              recipientCount: 11,
+            },
+          ],
+        }),
+      );
+    if (url.pathname === '/api/recipients')
+      return res.end(
+        JSON.stringify({
+          recipients: [
+            {
+              id: 'r1',
+              fullName: 'Jane Wanjiku',
+              msisdn: '254790005678',
+              status: 'ACTIVE',
+              externalReference: 'EMP-0041',
+              departmentId: 'd1',
+              departmentName: 'Engineering',
+              createdAt: '2026-04-02T08:00:00.000Z',
+              updatedAt: '2026-09-01T08:00:00.000Z',
+              paymentDetailsModifiedAt: '2026-09-01T08:00:00.000Z',
+            },
+            {
+              id: 'r2',
+              fullName: 'Peter Omondi',
+              msisdn: '254790001222',
+              status: 'ACTIVE',
+              externalReference: 'EMP-0042',
+              departmentId: 'd2',
+              departmentName: 'Operations',
+              createdAt: '2026-04-02T08:00:00.000Z',
+              updatedAt: '2026-08-20T08:00:00.000Z',
+              paymentDetailsModifiedAt: '2026-08-20T08:00:00.000Z',
+            },
+          ],
+          nextCursor: null,
+        }),
+      );
+    if (url.pathname === '/api/admin/users')
+      return res.end(
+        JSON.stringify({
+          users: [
+            {
+              userId: 'u1',
+              email: 'ceo@acme.test',
+              fullName: 'Amina Njeri',
+              level: 'L3',
+              status: 'ACTIVE',
+              createdAt: '2026-01-04T08:00:00.000Z',
+              hasAuthenticator: true,
+              hasAuthorizationPin: true,
+              lastLoginAt: '2026-09-15T07:40:00.000Z',
+            },
+            {
+              userId: 'u2',
+              email: 'finance@acme.test',
+              fullName: 'Otieno Were',
+              level: 'L2',
+              status: 'ACTIVE',
+              createdAt: '2026-01-04T08:00:00.000Z',
+              hasAuthenticator: true,
+              hasAuthorizationPin: false,
+              lastLoginAt: '2026-09-15T06:10:00.000Z',
+            },
+            {
+              userId: 'u3',
+              email: 'ops@acme.test',
+              fullName: 'Wanjiku Kamau',
+              level: 'L1',
+              status: 'SUSPENDED',
+              createdAt: '2026-02-11T08:00:00.000Z',
+              hasAuthenticator: false,
+              hasAuthorizationPin: false,
+              lastLoginAt: null,
+            },
+          ],
+        }),
+      );
+    if (url.pathname === '/api/admin/security/events')
+      return res.end(
+        JSON.stringify({
+          events: [
+            {
+              id: 'se1',
+              eventType: 'AUTHORIZATION_PIN_FAILED',
+              severity: 'CRITICAL',
+              description: 'Three consecutive wrong authorization PINs during a release',
+              ip: '41.90.12.8',
+              userAgent: 'Mozilla/5.0',
+              detail: null,
+              createdAt: '2026-09-15T07:10:00.000Z',
+              acknowledgedAt: null,
+              acknowledgedBy: null,
+              user: { name: 'Amina Njeri', email: 'ceo@acme.test' },
+            },
+            {
+              id: 'se2',
+              eventType: 'NEW_DEVICE',
+              severity: 'WARNING',
+              description: 'Sign-in from a device not seen before',
+              ip: '197.232.4.11',
+              userAgent: 'Mozilla/5.0',
+              detail: null,
+              createdAt: '2026-09-14T16:02:00.000Z',
+              acknowledgedAt: '2026-09-14T16:30:00.000Z',
+              acknowledgedBy: 'Amina Njeri',
+              user: { name: 'Otieno Were', email: 'finance@acme.test' },
+            },
+          ],
+          counts: [
+            { severity: 'CRITICAL', open: 1, total: 3 },
+            { severity: 'WARNING', open: 0, total: 6 },
+            { severity: 'INFO', open: 0, total: 41 },
+          ],
+          page: { pageSize: 100, nextCursor: null },
+        }),
+      );
+    if (url.pathname === '/api/admin/security/sessions')
+      return res.end(
+        JSON.stringify({
+          sessions: [
+            {
+              id: 'sess1',
+              userName: 'Amina Njeri',
+              email: 'ceo@acme.test',
+              authorityLevel: 'L3',
+              issuedAt: '2026-09-15T07:40:00.000Z',
+              expiresAt: '2026-09-15T15:40:00.000Z',
+              lastSeenAt: '2026-09-15T08:02:00.000Z',
+              webauthnVerified: true,
+              ip: '41.90.12.8',
+              userAgent: 'Mozilla/5.0',
+              deviceLabel: 'Office MacBook',
+              deviceTrust: 'TRUSTED',
+            },
+          ],
+          devices: [
+            {
+              id: 'dev1',
+              userName: 'Amina Njeri',
+              email: 'ceo@acme.test',
+              label: 'Office MacBook',
+              trustStatus: 'TRUSTED',
+              firstSeenIp: '41.90.12.8',
+              lastSeenIp: '41.90.12.8',
+              userAgent: 'Mozilla/5.0',
+              registeredAt: '2026-03-02T08:00:00.000Z',
+              lastActivityAt: '2026-09-15T08:02:00.000Z',
+            },
+          ],
+        }),
+      );
+    if (url.pathname === '/api/admin/conflicts')
+      return res.end(
+        JSON.stringify({
+          registrations: [
+            {
+              id: 'cf1',
+              userName: 'Otieno Were',
+              scopeType: 'RECIPIENT',
+              scopeLabel: 'Jane Wanjiku',
+              reason: 'Family member',
+              declaredAt: '2026-08-02T08:00:00.000Z',
+              declaredBy: 'Amina Njeri',
+              withdrawnAt: null,
+            },
+          ],
+        }),
+      );
+    if (url.pathname === '/api/admin/policies')
+      return res.end(
+        JSON.stringify({
+          policy: {
+            perPaymentLimitCents: 15000000,
+            dailyLimitCents: 500000000,
+            batchLimitCents: 200000000,
+            coolingOffSeconds: 300,
+            riskGateBand: 'ELEVATED',
+            allowL1FailedExport: true,
+            requireDualApprovalAboveCents: 100000000,
+          },
+        }),
+      );
+    if (url.pathname === '/api/admin/audit')
+      return res.end(
+        JSON.stringify({
+          events: [
+            {
+              event_reference: 'EVT-2026-004411',
+              sequence: '4411',
+              actor_id: 'u1',
+              actor_level: 'L3',
+              event_class: 'PAYMENT',
+              action: 'batch.released',
+              object_type: 'PaymentBatch',
+              object_id: 'b1',
+              outcome: 'SUCCESS',
+              occurred_at: '2026-09-15T07:45:00.000Z',
+              correlation_id: 'cor_A7NB750EH9654WJM',
+              detail: { batchVersion: 3, instructionCount: 42 },
+            },
+            {
+              event_reference: 'EVT-2026-004410',
+              sequence: '4410',
+              actor_id: 'u2',
+              actor_level: 'L2',
+              event_class: 'PAYMENT',
+              action: 'batch.approved',
+              object_type: 'PaymentBatch',
+              object_id: 'b1',
+              outcome: 'SUCCESS',
+              occurred_at: '2026-09-15T07:31:00.000Z',
+              correlation_id: 'cor_A7NB750EH9654WJM',
+              detail: null,
+            },
+          ],
+          nextCursor: null,
+        }),
+      );
+    if (url.pathname === '/api/payments/failure-summary')
+      return res.end(
+        JSON.stringify({
+          reasons: [
+            { failureCode: '2001', failureReason: 'Insufficient balance', count: 18 },
+            { failureCode: '2040', failureReason: 'Unregistered recipient', count: 9 },
+          ],
+        }),
+      );
     if (url.pathname === '/api/reports')
       return res.end(
         JSON.stringify({
@@ -726,6 +1039,59 @@ for (const theme of ['light', 'dark']) {
     console.log('  captured 12-report-print.pdf and .png');
   }
   await page.emulateMedia({ media: 'screen' });
+  // The print check narrowed the viewport to A4; put it back, or the taller sidebar puts
+  // later nav entries below the fold and every click below times out.
+  await page.setViewportSize({ width: 1440, height: 900 });
+
+  /*
+   * The rest of the authenticated console.
+   *
+   * Eight of the fifteen screens had never been captured, so nobody had looked at them in a
+   * browser. A page renders or it does not; a screenshot is the only thing that says which.
+   */
+  // Exact labels, anchored: `hasText: 'Security'` also matches 'Security centre', which
+  // would capture the wrong screen twice and never visit the account one.
+  for (const [label, nav] of [
+    ['13-reconciliation', 'Reconciliation'],
+    ['14-recipients', 'Recipients'],
+    ['15-intelligence', 'Intelligence'],
+    ['16-members', 'Members'],
+    ['17-policy', 'Policy'],
+    ['18-security-centre', 'Security centre'],
+    ['19-audit', 'Audit trail'],
+    ['20-account-security', 'Security'],
+  ]) {
+    const item = page.locator('.nav-item', { hasText: new RegExp(`^${nav}$`) }).first();
+    if ((await item.count()) === 0) {
+      errors.push(`[${theme}] no navigation entry for ${nav}`);
+      continue;
+    }
+    await item.click();
+    await page.waitForSelector('.page-title', { timeout: 5000 });
+
+    /*
+     * The heading must not end up underneath the sticky top bar.
+     *
+     * Navigating focuses #main-content so a keyboard user lands on the page rather than the
+     * nav item they just left. The browser scrolls that into view — and on a tall page it
+     * scrolled the heading straight under the sticky bar, so the screen a person arrived at
+     * opened with its own title half hidden.
+     */
+    const covered = await page.evaluate(() => {
+      const title = document.querySelector('.page-title');
+      const bar = document.querySelector('.topbar');
+      if (!title || !bar) return null;
+      const t = title.getBoundingClientRect();
+      const b = bar.getBoundingClientRect();
+      return { overlap: Math.round(b.bottom - t.top), title: Math.round(t.top) };
+    });
+    if (covered && covered.overlap > 0) {
+      errors.push(
+        `[${theme}] ${label}: the sticky top bar covers the page heading by ${covered.overlap}px`,
+      );
+    }
+    await shot(page, `${label}-${theme}`);
+  }
 
   await context.close();
 }

@@ -108,12 +108,15 @@ export function SecurityCentrePage() {
         </Notice>
       )}
 
-      <div className="card">
-        <div className="card-body" style={{ display: 'flex', gap: 'var(--s3)', flexWrap: 'wrap' }}>
-          <label
-            className="small"
-            style={{ display: 'flex', alignItems: 'center', gap: 'var(--s2)' }}
-          >
+      {/*
+        The shared filter bar, as on Transactions and the audit trail. These were a plain flex
+        row in a card, but .input is width:100%, so the severity select took the whole line
+        and the checkbox, the select and the action stacked into three rows.
+      */}
+      <div className="filter-bar">
+        <div className="filter-field" style={{ flex: '0 0 auto' }}>
+          <span className="label">Show</span>
+          <label className="checkbox-row">
             <input
               type="checkbox"
               checked={unacknowledgedOnly}
@@ -121,9 +124,14 @@ export function SecurityCentrePage() {
             />
             Unreviewed only
           </label>
+        </div>
+        <div className="filter-field">
+          <label className="label" htmlFor="severity-filter">
+            Severity
+          </label>
           <select
+            id="severity-filter"
             className="input"
-            aria-label="Filter by severity"
             value={severity}
             onChange={(event) => setSeverity(event.target.value)}
           >
@@ -132,6 +140,8 @@ export function SecurityCentrePage() {
             <option value="WARNING">Warning</option>
             <option value="INFO">Information</option>
           </select>
+        </div>
+        <div className="filter-actions">
           <button
             className="button"
             data-variant="primary"

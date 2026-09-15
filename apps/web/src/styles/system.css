@@ -916,6 +916,22 @@ textarea {
   display: flex;
   flex-direction: column;
   gap: var(--s2);
+  /*
+   * A settings card spans the full width of a 1440px screen, and .input is width:100%, so a
+   * six-digit PIN and a five-digit shortcode were rendered in 1100px-wide boxes. The width
+   * of a field is a claim about how much you are expected to type; that claim was wrong on
+   * every settings screen in the console.
+   *
+   * Capped here rather than per input because it is the form column that is too wide, not
+   * the controls. Inside a dialog the dialog is narrower than this anyway, so nothing there
+   * changes.
+   */
+  max-width: 32rem;
+}
+
+/* Long-form text is the exception: a CSV paste or a certificate wants the room. */
+.field:has(textarea) {
+  max-width: none;
 }
 
 .label {
@@ -986,6 +1002,9 @@ textarea {
   gap: var(--s1);
   min-width: 140px;
   flex: 1 1 140px;
+  /* Free to grow into the row, but an "Every severity" select has no use for 800px: with
+     one field in the bar it took the entire width. */
+  max-width: 22rem;
 }
 
 .filter-actions {
@@ -1661,6 +1680,19 @@ textarea {
   padding-block-start: var(--s5);
 }
 
+/*
+ * Keep the heading clear of the sticky bar when the page is scrolled into view.
+ *
+ * Navigating focuses #main-content, so a keyboard user lands on the page rather than on the
+ * nav item they just left. The browser scrolls that into view — and on a tall page it put
+ * the heading 43px underneath the sticky bar, so the screen someone had just chosen opened
+ * with its own title half covered. The bar is 56px plus its border; the rest is breathing
+ * room.
+ */
+#main-content {
+  scroll-margin-top: calc(56px + var(--s5));
+}
+
 /* ---------------------------------------------------------------------------
    Sign-in
 
@@ -2257,4 +2289,64 @@ textarea {
 .input[type='file']:hover::file-selector-button {
   background: var(--accent-soft);
   color: var(--accent-ink);
+}
+
+/* ---------------------------------------------------------------------------
+   Row actions
+
+   Every action inside a table row was a ghost button, and a ghost button has a
+   transparent border. Three of them in one cell — "History  Change number
+   Deactivate" — rendered as an unbroken run of bold text with nothing to say
+   where one control ended and the next began, or that any of them were
+   controls at all. Four screens shared the defect and each had reinvented the
+   flex wrapper inline.
+
+   Ghost is still right where it sits BESIDE a filled button, as a quiet Cancel
+   next to Save: there the primary button carries the affordance for the pair.
+   It is wrong when it is the only thing in the cell, which is the case in every
+   table. So the border comes back inside table rows and nowhere else.
+   --------------------------------------------------------------------------- */
+
+.row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s2);
+}
+
+.table td .button[data-variant='ghost'] {
+  border-color: var(--hairline-strong);
+  color: var(--ink-secondary);
+}
+
+.table td .button[data-variant='ghost']:hover:not(:disabled) {
+  border-color: var(--ink-tertiary);
+  color: var(--ink);
+}
+
+/*
+ * A button in a settings card sizes to its label.
+ *
+ * `.stack` is a flex column, which stretches its children, so "Set PIN" and "Save policy"
+ * were rendered 1100px wide — the same width as the card. Width is a claim about weight,
+ * and a full-bleed primary button on a settings page overstates every one of these actions.
+ *
+ * Scoped to card bodies on purpose: inside a dialog, and on the sign-in form, a full-width
+ * primary IS the intended treatment, because the surface is already narrow and the button
+ * is the only thing to do there.
+ */
+.card-body .stack > .button,
+.card-body .stack > .row > .button {
+  align-self: flex-start;
+}
+
+/* A checkbox and its label read as one control, so they sit on one line and align with the
+   inputs beside them in a filter bar. */
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  min-height: 34px;
+  font-size: var(--text-sm);
+  white-space: nowrap;
+  cursor: pointer;
 }

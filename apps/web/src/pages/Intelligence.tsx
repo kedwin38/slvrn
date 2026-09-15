@@ -126,7 +126,7 @@ function FailureExplainer() {
             void ask(() => api.ai.explainFailure(code.trim()));
           }}
         >
-          <div style={{ flex: '1 1 12rem' }}>
+          <div style={{ flex: '0 1 20rem' }}>
             <Field label="Provider failure code" hint="For example 1, 2001 or 2040">
               {(props) => (
                 <input
@@ -207,7 +207,7 @@ function BatchAnalyser() {
             void ask(() => api.ai.analyseBatch(batchId.trim()));
           }}
         >
-          <div style={{ flex: '1 1 22rem' }}>
+          <div style={{ flex: '0 1 28rem' }}>
             <Field label="Batch id" hint="Copy it from the batch you want screened.">
               {(props) => (
                 <input

@@ -202,7 +202,7 @@ export function DarajaCredentialsPage() {
                         </span>
                       </td>
                       <td>
-                        <div style={{ display: 'flex', gap: 'var(--s2)', flexWrap: 'wrap' }}>
+                        <div className="row-actions">
                           <button
                             className="button"
                             data-variant="ghost"
