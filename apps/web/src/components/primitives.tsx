@@ -97,10 +97,19 @@ export function BatchStateChip({ state }: { state: string }) {
 // Feedback
 // ---------------------------------------------------------------------------
 
+/*
+ * Each glyph carries U+FE0E, the text variation selector.
+ *
+ * Without it "\u26a0" and "\u2139" have emoji presentation by default on iOS and Windows,
+ * so a status that is meant to read as a typographic mark turns into a full-colour emoji
+ * beside sober financial copy — and, on a monochrome printout, into an ink blot. FE0E asks
+ * for the text form; systems that only have the emoji font ignore it, and the adjacent
+ * label still carries the meaning either way.
+ */
 const NOTICE_GLYPH = {
-  info: 'ℹ',
+  info: 'ℹ\uFE0E',
   success: '✓',
-  warning: '⚠',
+  warning: '⚠\uFE0E',
   danger: '✕',
   neutral: '•',
 } as const;

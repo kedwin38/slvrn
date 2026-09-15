@@ -22,6 +22,7 @@ import { useEffect, useState } from 'react';
 import { formatCents } from '@solvaren/core';
 import { api, ApiError, type CeremonyResponse } from '../lib/api.js';
 import { Notice, Modal } from '../components/primitives.js';
+import { IconAccountSecurity } from '../components/icons.js';
 
 interface Props {
   batchId: string;
@@ -352,7 +353,10 @@ export function AuthorizationCeremony({ batchId, onClose, onReleased }: Props) {
               Cancel
             </button>
 
-            <div className="stack" style={{ gap: 'var(--s2)', alignItems: 'flex-end' }}>
+            <div
+              className="stack"
+              style={{ gap: 'var(--s2)', alignItems: 'flex-end', minWidth: 0, textAlign: 'right' }}
+            >
               <button
                 className="button"
                 data-variant="release"
@@ -360,11 +364,20 @@ export function AuthorizationCeremony({ batchId, onClose, onReleased }: Props) {
                 disabled={Boolean(blockingReason) || busy}
                 aria-describedby={blockingReason ? 'release-blocked' : undefined}
               >
-                {phase === 'signing'
-                  ? 'Waiting for your security key…'
-                  : phase === 'releasing'
-                    ? 'Releasing…'
-                    : `🔒 Release KES ${formatCents(ceremony.manifest.totalAmountCents)}`}
+                {phase === 'signing' ? (
+                  'Waiting for your security key…'
+                ) : phase === 'releasing' ? (
+                  'Releasing…'
+                ) : (
+                  <>
+                    {/* Drawn, not 🔒. The nav icons were moved off Unicode because a glyph
+                        renders as whatever font the OS substitutes — line art here, emoji
+                        there, a tofu box elsewhere. That is worse on the release button
+                        than anywhere else in the product. */}
+                    <IconAccountSecurity size={16} />
+                    Release KES {formatCents(ceremony.manifest.totalAmountCents)}
+                  </>
+                )}
               </button>
               {/* The disabled state always says what is outstanding. A greyed-out button
                   with no explanation is the most common cause of a support call. */}
