@@ -1855,3 +1855,243 @@ textarea {
     align-items: flex-start;
   }
 }
+
+/* ---------------------------------------------------------------------------
+   Print
+
+   Reports leave the building. A month-end pack goes into a board file, an audit
+   response is printed and signed, and a reconciliation summary is mailed as a
+   PDF — so the printed page is a real output of this product, not a browser
+   accident, and it had no stylesheet at all.
+
+   Three things were actually broken on paper rather than merely ugly:
+
+   - `.table-scroll` is `overflow-x: auto`, which on screen scrolls and on paper
+     CLIPS. Any column past the viewport width was silently absent from the
+     printout — the worst kind of defect in a financial document, because the
+     page looks complete.
+   - Table headers did not repeat, so page two of a payment listing was columns
+     of unlabelled numbers.
+   - Status is carried by tinted chips. Backgrounds are dropped by default in
+     print, so on a monochrome printer every status chip rendered identically.
+     Each keeps a border and its text label here.
+   --------------------------------------------------------------------------- */
+
+.print-masthead {
+  display: none;
+}
+
+@media print {
+  /* Ink on white regardless of the reader's theme: a dark-theme screenshot of a
+     report wastes a toner cartridge and is harder to read. */
+  :root,
+  :root[data-theme='dark'],
+  :root:not([data-theme='light']) {
+    --ground: #fff;
+    --surface: #fff;
+    --surface-raised: #fff;
+    --surface-sunken: #fff;
+    --hairline: #c9ccd4;
+    --hairline-strong: #8d919c;
+    --ink: #000;
+    --ink-secondary: #26282e;
+    --ink-tertiary: #4a4d55;
+    --accent: #000;
+    --accent-ink: #000;
+    --shadow-sm: none;
+    --shadow-md: none;
+    --shadow-lg: none;
+  }
+
+  @page {
+    margin: 16mm 14mm;
+  }
+
+  html,
+  body {
+    background: #fff;
+    color: #000;
+    font-size: 10pt;
+  }
+
+  /* Chrome, controls and anything that only exists to be clicked. */
+  .sidebar,
+  .topbar,
+  .button,
+  .nav,
+  .pagination,
+  .toast,
+  .toast-stack,
+  .screen-only,
+  [data-print='hide'] {
+    display: none !important;
+  }
+
+  .shell,
+  .content {
+    display: block;
+  }
+
+  .main,
+  .content > .main {
+    padding: 0;
+    max-width: none;
+  }
+
+  .card {
+    border: 1px solid var(--hairline);
+    border-radius: 0;
+    box-shadow: none;
+    break-inside: avoid;
+  }
+
+  .card-body {
+    padding: 8pt 10pt;
+  }
+
+  /* The clipping fix: on paper there is nothing to scroll to. */
+  .table-scroll {
+    overflow: visible !important;
+    max-height: none !important;
+  }
+
+  /*
+   * Fixed layout is what makes a wide table fit the sheet at all. With auto layout the
+   * table takes its min-content width — the widest reference, the longest name — and a
+   * nine-column listing came out 715px against a 686px page box, so the last column was
+   * cut off by the paper edge on a document that otherwise looked complete. Fixed layout
+   * divides the available width instead and lets cells wrap into it.
+   */
+  .table {
+    width: 100%;
+    table-layout: fixed;
+    font-size: 9pt;
+  }
+
+  /* Repeat the column headings on every page. */
+  .table thead {
+    display: table-header-group;
+  }
+
+  .table tfoot {
+    display: table-footer-group;
+  }
+
+  .table tr {
+    break-inside: avoid;
+  }
+
+  .table th,
+  .table td {
+    padding: 4pt 6pt;
+    border-block-end: 1px solid var(--hairline);
+    /* On screen headers are nowrap and the row scrolls. On paper nothing scrolls, so a
+       nowrap header sets a floor on the table width and pushes the right-hand columns off
+       the sheet — which reads as a complete document that is quietly missing data. */
+    white-space: normal;
+    overflow-wrap: break-word;
+  }
+
+  /* Sticky headers are a scroll affordance and fight table-header-group repetition. */
+  .table th {
+    position: static;
+    background: none;
+  }
+
+  /* Status must survive monochrome: keep the outline and the label, drop the tint. */
+  .chip {
+    border: 1px solid var(--hairline-strong) !important;
+    background: none !important;
+    color: #000 !important;
+    print-color-adjust: exact;
+  }
+
+  /* An AI advisory formatted like a computed figure is exactly how a model's guess
+     ends up quoted in a board pack as one (§12.2). The rule keeps it separated on
+     paper, where the tinted background does not print. */
+  .notice {
+    border: 1px solid var(--hairline-strong);
+    border-inline-start-width: 3pt;
+    background: none;
+    break-inside: avoid;
+  }
+
+  .print-masthead {
+    display: block;
+    margin-block-end: 10pt;
+    padding-block-end: 8pt;
+    border-block-end: 1.5pt solid #000;
+  }
+
+  .print-masthead-row {
+    display: flex;
+    justify-content: space-between;
+    font-size: 8pt;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    margin-block-end: 6pt;
+  }
+
+  .print-masthead h1 {
+    font-size: 15pt;
+    letter-spacing: -0.02em;
+    margin: 0 0 3pt;
+  }
+
+  .print-masthead p {
+    margin: 0;
+    font-size: 8.5pt;
+    color: var(--ink-secondary);
+    line-height: 1.5;
+  }
+
+  .section-title,
+  h1,
+  h2,
+  h3 {
+    break-after: avoid;
+  }
+
+  /* The masthead is the printed page's heading; the console's own is a second one. */
+  .page-header {
+    display: none;
+  }
+
+  /* Uppercase with letter-spacing costs roughly a third of a column's width. At print
+     size that broke "REFERENCE" across two lines in a 76pt column; sentence case fits. */
+  .table th {
+    text-transform: none;
+    letter-spacing: 0;
+    font-size: 8.5pt;
+    overflow-wrap: break-word;
+  }
+
+  /* Three highlights across reads as a summary band; two across plus an orphan does not. */
+  .report-document .grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6pt;
+  }
+
+  /*
+   * Amounts stay tabular so columns of figures still align on paper, and never wrap: a
+   * "596,000.00" broken across two lines reads as two numbers. If a figure cannot fit its
+   * column the table overflows the sheet instead, which the ui:check print assertion
+   * catches — a visible failure rather than a quietly wrong one.
+   */
+  /* Scoped through .table so it outranks the `.table td` wrapping rule above — as a bare
+     `.numeric` it lost on specificity and the figures wrapped anyway. */
+  .table .numeric,
+  .table .money,
+  .numeric,
+  .money {
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    overflow-wrap: normal;
+  }
+
+  /* Href expansion is standard print advice and wrong here: the console's links are
+     in-app routes, so it would print "(http://…/#/batches)" beside every one. */
+  a[href]::after {
+    content: none;
+  }
+}

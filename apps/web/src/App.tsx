@@ -324,7 +324,7 @@ export function App() {
 
           {route === 'reconciliation' && <ReconciliationPage capabilities={capabilities} />}
           {route === 'recipients' && <RecipientsPage capabilities={capabilities} />}
-          {route === 'reports' && <ReportsPage />}
+          {route === 'reports' && <ReportsPage user={session.user} />}
           {route === 'intelligence' && <IntelligencePage capabilities={capabilities} />}
           {route === 'security-centre' && <SecurityCentrePage />}
           {route === 'backups' && <BackupsPage />}

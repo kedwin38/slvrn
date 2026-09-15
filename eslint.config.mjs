@@ -133,6 +133,7 @@ export default tseslint.config(
         // reference the DOM even though the file itself executes in Node.
         document: 'readonly',
         window: 'readonly',
+        getComputedStyle: 'readonly',
       },
     },
     rules: {

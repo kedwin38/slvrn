@@ -76,11 +76,82 @@ const server = createServer((req, res) => {
             'dashboard:balance_panel': true,
             'dashboard:recent_transactions_panel': true,
             'analytics:basic': true,
+            'reports:operational': true,
+            'reports:management': true,
+            'reports:executive': true,
           },
         }),
       );
     if (url.pathname === '/api/admin/daraja')
       return res.end(JSON.stringify({ configurations: [] }));
+    if (url.pathname === '/api/reports')
+      return res.end(
+        JSON.stringify({
+          reports: [
+            {
+              family: 'EXECUTIVE_SUMMARY',
+              title: 'Executive summary',
+              description: 'Disbursement totals and exceptions for the period.',
+            },
+          ],
+        }),
+      );
+    /*
+     * A report wide enough to overflow the viewport, on purpose: .table-scroll clips on
+     * paper rather than scrolling, so a narrow fixture would pass a printout that silently
+     * drops its right-hand columns.
+     */
+    if (url.pathname.startsWith('/api/reports/'))
+      return res.end(
+        JSON.stringify({
+          generatedAt: '2026-09-15T09:12:00.000Z',
+          exportReference: 'RPT-2026-09-0041',
+          report: {
+            family: 'EXECUTIVE_SUMMARY',
+            title: 'Executive summary',
+            description: 'Disbursement totals and exceptions for the period.',
+            periodFrom: '2026-09-01T00:00:00.000Z',
+            periodTo: '2026-09-15T00:00:00.000Z',
+            highlights: [
+              { label: 'Disbursed', value: 'KES 5,960,000', hint: '412 payments' },
+              { label: 'Failed', value: '31', hint: '1.9% of attempts' },
+              { label: 'Awaiting release', value: '2 batches' },
+            ],
+            sections: [
+              {
+                title: 'Batches in the period',
+                columns: [
+                  { key: 'reference', label: 'Reference', format: 'text' },
+                  { key: 'prepared', label: 'Prepared by', format: 'text' },
+                  { key: 'approved', label: 'Approved by', format: 'text' },
+                  { key: 'released', label: 'Released by', format: 'text' },
+                  { key: 'count', label: 'Payments', format: 'number' },
+                  { key: 'gross', label: 'Gross', format: 'money' },
+                  { key: 'charges', label: 'Charges', format: 'money' },
+                  { key: 'net', label: 'Net settled', format: 'money' },
+                  { key: 'releasedAt', label: 'Released at', format: 'timestamp' },
+                ],
+                rows: Array.from({ length: 24 }, (_, i) => ({
+                  reference: `BATCH-2026-09-${String(i + 1).padStart(3, '0')}`,
+                  prepared: 'Wanjiku Kamau',
+                  approved: 'Otieno Were',
+                  released: 'Amina Njeri',
+                  count: 12 + i,
+                  gross: 59600000 + i * 100000,
+                  charges: 33000,
+                  net: 59567000 + i * 100000,
+                  releasedAt: `2026-09-${String((i % 28) + 1).padStart(2, '0')}T14:05:00.000Z`,
+                })),
+              },
+            ],
+            narrative: {
+              text: 'Failure concentration rose in the second week, driven by unregistered recipients.',
+              source: 'AI_ADVISORY',
+              model: 'advisory-1',
+            },
+          },
+        }),
+      );
     if (url.pathname === '/api/analytics/action-queue')
       return res.end(JSON.stringify({ items: [], counts: { total: 0, critical: 0, warning: 0 } }));
     if (url.pathname === '/api/analytics/operational')
@@ -589,6 +660,72 @@ for (const theme of ['light', 'dark']) {
   await page.click('text=Backups');
   await page.waitForSelector('.card-title', { timeout: 5000 });
   await shot(page, `06-backups-${theme}`);
+
+  /*
+   * Reports, then the same page under print media.
+   *
+   * A report is a real output of this product — it goes into a board file or an audit
+   * response — so the printed page is checked the way a screen is. Two failures are
+   * asserted because both look fine on screen and ruin the document: .table-scroll is
+   * `overflow-x: auto`, which CLIPS on paper rather than scrolling, so wide columns
+   * vanish from a printout that still looks complete; and the sidebar taking a third of
+   * the sheet.
+   */
+  await page.click('.nav-item >> text=Reports');
+  await page.waitForSelector('.page-title', { timeout: 5000 });
+  await page.getByRole('button', { name: 'Generate', exact: true }).click();
+  await page.waitForSelector('.report-document table.table', { timeout: 5000 });
+  await shot(page, `11-reports-${theme}`);
+
+  /*
+   * A4 at 96dpi less the @page margins. emulateMedia alone keeps the 1440px viewport, at
+   * which a nine-column table fits and the clipping assertion below measures nothing —
+   * which is exactly what it did until this line was added.
+   */
+  await page.emulateMedia({ media: 'print' });
+  await page.setViewportSize({ width: 688, height: 1056 });
+  await page.waitForTimeout(250);
+  const printed = await page.evaluate(() => {
+    const scroller = document.querySelector('.report-document .table-scroll');
+    const table = scroller?.querySelector('table.table');
+    const masthead = document.querySelector('.print-masthead');
+    const style = scroller ? getComputedStyle(scroller) : null;
+    return {
+      // Clipped if the table is wider than the box that is meant to hold it on paper.
+      clipped: Boolean(table && scroller && table.scrollWidth > scroller.clientWidth + 1),
+      overflowX: style?.overflowX ?? 'none',
+      mastheadShown: Boolean(masthead && getComputedStyle(masthead).display !== 'none'),
+      chromeShown: ['.sidebar', '.topbar', '.button'].some((sel) => {
+        const el = document.querySelector(sel);
+        return Boolean(el && getComputedStyle(el).display !== 'none');
+      }),
+      headerRepeats:
+        getComputedStyle(document.querySelector('.report-document table.table thead')).display ===
+        'table-header-group',
+    };
+  });
+  if (printed.clipped) {
+    errors.push(`[${theme}] printed report clips its table (overflow-x: ${printed.overflowX})`);
+  }
+  if (!printed.mastheadShown) errors.push(`[${theme}] printed report has no masthead`);
+  if (printed.chromeShown) errors.push(`[${theme}] printed report still shows console chrome`);
+  if (!printed.headerRepeats) {
+    errors.push(`[${theme}] printed table headers do not repeat across pages`);
+  }
+  console.log(
+    `  print: clipped ${printed.clipped ? 'YES (BUG)' : 'no'}, masthead ${
+      printed.mastheadShown ? 'yes' : 'MISSING'
+    }, chrome ${printed.chromeShown ? 'SHOWN (BUG)' : 'hidden'}, repeating headers ${
+      printed.headerRepeats ? 'yes' : 'NO'
+    }`,
+  );
+  if (theme === 'light') {
+    await page.pdf({ path: `${SHOTS}/12-report-print.pdf`, format: 'A4', printBackground: true });
+    // A PNG of the same thing, because the PDF is not reviewable without a renderer.
+    await page.screenshot({ path: `${SHOTS}/12-report-print.png`, fullPage: true });
+    console.log('  captured 12-report-print.pdf and .png');
+  }
+  await page.emulateMedia({ media: 'screen' });
 
   await context.close();
 }
