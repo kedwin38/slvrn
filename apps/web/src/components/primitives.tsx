@@ -88,7 +88,16 @@ export function BatchStateChip({ state }: { state: string }) {
             : 'info';
   return (
     <span className="chip" data-tone={tone}>
-      {state.replace(/_/g, ' ').toLowerCase()}
+      {/*
+        Lowercasing alone rendered L3_READY as "l3 ready", and a lowercase l beside a digit
+        is the one letter that should never be ambiguous here: L1, L2 and L3 are the
+        authority levels the whole separation-of-duties model is built on. The level token
+        keeps its capital; everything else stays quiet lowercase.
+      */}
+      {state
+        .replace(/_/g, ' ')
+        .toLowerCase()
+        .replace(/\bl([123])\b/g, 'L$1')}
     </span>
   );
 }
