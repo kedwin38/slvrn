@@ -1156,6 +1156,37 @@ const overflow = await mpage.evaluate(
   () => document.documentElement.scrollWidth > window.innerWidth + 1,
 );
 console.log(`  mobile horizontal overflow: ${overflow ? 'YES (BUG)' : 'no'}`);
+
+/*
+ * And on the table screens, which is where it would actually happen.
+ *
+ * The dashboard is mostly cards, so checking only the dashboard proved the least likely
+ * page. Tables are the ones with a documented right to scroll — inside .table-scroll — and
+ * the check is that the scrolling stays there and never reaches the document.
+ */
+for (const nav of ['Transactions', 'Recipients', 'Members', 'Audit trail']) {
+  await mpage.click('.nav-toggle');
+  await mpage.waitForTimeout(250);
+  await mpage.click(`.nav-item >> text="${nav}"`);
+  await mpage.waitForSelector('.page-title', { timeout: 5000 });
+  await mpage.waitForTimeout(250);
+  const wide = await mpage.evaluate(() => ({
+    page: document.documentElement.scrollWidth > window.innerWidth + 1,
+    // A table wider than the phone is fine; a table whose CONTAINER cannot scroll is not.
+    unscrollable: [...document.querySelectorAll('table.table')].some((table) => {
+      const box = table.closest('.table-scroll');
+      return !box && table.scrollWidth > window.innerWidth + 1;
+    }),
+  }));
+  if (wide.page) errors.push(`[mobile] ${nav} overflows the viewport horizontally`);
+  if (wide.unscrollable) errors.push(`[mobile] ${nav} has a wide table outside .table-scroll`);
+  console.log(
+    `  mobile ${nav}: overflow ${wide.page ? 'YES (BUG)' : 'no'}, unscrollable table ${
+      wide.unscrollable ? 'YES (BUG)' : 'no'
+    }`,
+  );
+}
+await mpage.screenshot({ path: `${SHOTS}/21-mobile-table.png`, fullPage: false });
 await mobile.close();
 
 await browser.close();
