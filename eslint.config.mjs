@@ -141,4 +141,20 @@ export default tseslint.config(
       'no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
     },
   },
+  {
+    /*
+     * apps/web/public is served verbatim to the browser: no bundler, no imports, no TypeScript.
+     * theme.js runs from <head> before the bundle exists, so it is a plain classic script and
+     * needs the browser globals declared rather than the Node ones the repo defaults to.
+     */
+    files: ['apps/web/public/**/*.js'],
+    languageOptions: {
+      sourceType: 'script',
+      globals: {
+        window: 'readonly',
+        document: 'readonly',
+        localStorage: 'readonly',
+      },
+    },
+  },
 );

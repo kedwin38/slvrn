@@ -14,6 +14,7 @@
  */
 
 import { useEffect, useRef, useState } from 'react';
+import { getTheme, setTheme, subscribeToTheme, type ThemePreference } from '../lib/theme.js';
 
 export function AccountMenu({
   fullName,
@@ -83,11 +84,57 @@ export function AccountMenu({
             <div className="small muted">{email}</div>
             <div className="small muted">{levelTitle}</div>
           </div>
+          <ThemeChoice />
           <button className="account-menu-item" role="menuitem" onClick={onSignOut}>
             Sign out
           </button>
         </div>
       )}
+    </div>
+  );
+}
+
+/*
+ * The colour theme, offered to everybody rather than buried in an administrator screen.
+ *
+ * A radio group, not a switch: the third state is the point. "System" follows the machine
+ * and keeps following it, which is the right default and the one most people should stay
+ * on; a two-state toggle would force every reader who touched it into a fixed theme for
+ * good. The group is labelled and arrow-key navigable because that is what a radio group
+ * is, and a menu is a poor place to discover that your keyboard does not work.
+ */
+const THEMES: { value: ThemePreference; label: string }[] = [
+  { value: 'system', label: 'System' },
+  { value: 'light', label: 'Light' },
+  { value: 'dark', label: 'Dark' },
+];
+
+function ThemeChoice() {
+  const [preference, setPreference] = useState<ThemePreference>(getTheme);
+
+  // The preference lives outside React — public/theme.js sets it before the bundle loads,
+  // and the OS can change it under 'system' — so the component follows the store.
+  useEffect(() => subscribeToTheme(setPreference), []);
+
+  return (
+    <div className="account-menu-section">
+      <div className="account-menu-label" id="theme-choice-label">
+        Appearance
+      </div>
+      <div className="segmented" role="radiogroup" aria-labelledby="theme-choice-label">
+        {THEMES.map((theme) => (
+          <button
+            key={theme.value}
+            type="button"
+            role="radio"
+            aria-checked={preference === theme.value}
+            className="segmented-option"
+            onClick={() => setTheme(theme.value)}
+          >
+            {theme.label}
+          </button>
+        ))}
+      </div>
     </div>
   );
 }

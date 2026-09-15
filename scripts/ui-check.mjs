@@ -1039,9 +1039,82 @@ for (const theme of ['light', 'dark']) {
     console.log('  captured 12-report-print.pdf and .png');
   }
   await page.emulateMedia({ media: 'screen' });
-  // The print check narrowed the viewport to A4; put it back, or the taller sidebar puts
-  // later nav entries below the fold and every click below times out.
   await page.setViewportSize({ width: 1440, height: 900 });
+
+  /*
+   * The theme switch.
+   *
+   * Driven rather than described, because the three things that make it worth having are
+   * all invisible in a screenshot: that choosing a theme actually repaints, that the
+   * choice survives a reload (the pre-paint script in <head> reading localStorage), and
+   * that returning to System hands control back to the operating system.
+   *
+   * `theme` here is the context's colorScheme, so "system" resolves to it — which makes
+   * the dark pass a genuine test of the light override and vice versa.
+   */
+  const opposite = theme === 'dark' ? 'light' : 'dark';
+  const openMenu = async () => {
+    await page.click('.account-trigger');
+    await page.waitForSelector('.segmented', { timeout: 5000 });
+  };
+  const ground = () => page.evaluate(() => getComputedStyle(document.body).backgroundColor);
+
+  await openMenu();
+  const systemGround = await ground();
+  await page.click(`.segmented-option >> text="${opposite[0].toUpperCase()}${opposite.slice(1)}"`);
+  await page.waitForTimeout(250);
+  const switchedGround = await ground();
+  const attribute = await page.getAttribute('html', 'data-theme');
+
+  if (attribute !== opposite) {
+    errors.push(`[${theme}] choosing ${opposite} set data-theme to ${attribute ?? 'nothing'}`);
+  }
+  if (systemGround === switchedGround) {
+    errors.push(`[${theme}] choosing ${opposite} did not repaint (still ${systemGround})`);
+  }
+  await shot(page, `22-theme-${opposite}-from-${theme}`);
+
+  /*
+   * A preference nobody has to set twice: reload and it is still there.
+   *
+   * The reload lands on the sign-in screen, because the session token is held in memory
+   * and does not survive one — which makes this a stronger check than intended. The theme
+   * is applied by the script in <head> from localStorage alone, so it holds before there
+   * is a session, a user or any React at all.
+   */
+  await page.reload({ waitUntil: 'networkidle' });
+  const afterReload = await page.getAttribute('html', 'data-theme');
+  if (afterReload !== opposite) {
+    errors.push(
+      `[${theme}] the theme did not survive a reload (data-theme is ${afterReload ?? 'nothing'})`,
+    );
+  }
+
+  await page.fill('input[type=email]', 'ceo@acme.test');
+  await page.fill('input[type=password]', 'correct horse battery staple');
+  await page.click('button[type=submit]');
+  await page.waitForSelector('.page-title', { timeout: 5000 });
+
+  // And back to System, which must hand control to the OS rather than pin the last choice.
+  await openMenu();
+  await page.click('.segmented-option >> text="System"');
+  await page.waitForTimeout(250);
+  const restored = await page.getAttribute('html', 'data-theme');
+  const restoredGround = await ground();
+  if (restored !== null) {
+    errors.push(`[${theme}] System left data-theme set to ${restored}`);
+  }
+  if (restoredGround !== systemGround) {
+    errors.push(`[${theme}] System did not return to the operating system's theme`);
+  }
+  await page.keyboard.press('Escape');
+  console.log(
+    `  theme: ${opposite} applied ${attribute === opposite ? 'yes' : 'NO (BUG)'}, survives reload ${
+      afterReload === opposite ? 'yes' : 'NO (BUG)'
+    }, System restores ${restored === null && restoredGround === systemGround ? 'yes' : 'NO (BUG)'}`,
+  );
+
+  // (viewport already restored above, before the theme switch was driven)
 
   /*
    * The rest of the authenticated console.

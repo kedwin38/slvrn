@@ -40,6 +40,16 @@
       content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; form-action 'none'; base-uri 'none'; object-src 'none'"
     />
 
+    <!--
+      Applies a stored theme before the first paint. Synchronous and in <head> on purpose:
+      deferred or moved below the body, the page paints in the system theme and then flips.
+
+      A separate file rather than an inline script because this console ships
+      `script-src 'self'` with no 'unsafe-inline', and adding that to a payment
+      authorization console to save one frame of white would be a poor trade.
+    -->
+    <script src="/theme.js"></script>
+
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <link rel="apple-touch-icon" href="/icon-180.png" />
   </head>

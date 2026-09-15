@@ -1643,6 +1643,67 @@ textarea {
   background: var(--surface-sunken);
 }
 
+.account-menu-section {
+  padding: var(--s3) var(--s4);
+  border-block-end: 1px solid var(--hairline);
+}
+
+.account-menu-label {
+  font-size: var(--text-2xs);
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-tertiary);
+  margin-block-end: var(--s2);
+}
+
+/* ---------------------------------------------------------------------------
+   Segmented control
+
+   Three mutually exclusive options that are all worth showing at once. A
+   dropdown would hide two of the three behind a click, and a switch cannot say
+   "System" at all — which is the option most people should be on, and the only
+   one that keeps tracking the machine after it is chosen.
+   --------------------------------------------------------------------------- */
+
+.segmented {
+  display: flex;
+  padding: 2px;
+  gap: 2px;
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--radius);
+  background: var(--surface-sunken);
+}
+
+.segmented-option {
+  flex: 1;
+  padding: var(--s1) var(--s2);
+  border: 0;
+  border-radius: calc(var(--radius) - 3px);
+  background: none;
+  font: inherit;
+  font-size: var(--text-xs);
+  font-weight: 550;
+  color: var(--ink-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.segmented-option:hover {
+  color: var(--ink);
+}
+
+.segmented-option[aria-checked='true'] {
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: var(--shadow-sm);
+}
+
+.segmented-option:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
 /* ---- Sidebar foot ---- */
 
 .sidebar-foot {
