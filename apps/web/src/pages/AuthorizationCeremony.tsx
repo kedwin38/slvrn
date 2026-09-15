@@ -157,7 +157,7 @@ export function AuthorizationCeremony({ batchId, onClose, onReleased }: Props) {
             : null;
 
   return (
-    <Modal open onClose={abandon} labelledBy="ceremony-title" dismissible={!busy}>
+    <Modal open onClose={abandon} labelledBy="ceremony-title" dismissible={!busy} bleed>
       {phase === 'loading' && (
         <div className="ceremony-body">
           <div className="skeleton" style={{ height: 24, width: '60%' }} />

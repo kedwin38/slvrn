@@ -1128,6 +1128,19 @@ textarea {
   width: min(560px, 100%);
   max-height: calc(100dvh - var(--s8));
   overflow-y: auto;
+  padding: var(--s5);
+}
+
+/* For content that paints its own edge-to-edge bands — the release ceremony's header,
+   amount panel and footer. Everything else wants the padding above. */
+.ceremony-bleed {
+  padding: 0;
+}
+
+/* A dialog's own heading needs room beneath it. Callers pass a bare <h2> followed by their
+   form, and the form's own gap does not apply across the two. */
+.ceremony:not(.ceremony-bleed) > h2:first-child {
+  margin-block-end: var(--s4);
 }
 
 .ceremony-header {
@@ -2203,4 +2216,45 @@ textarea {
   .nav-scrim {
     transition: none;
   }
+}
+
+/* ---------------------------------------------------------------------------
+   File input
+
+   Both CSV uploads carry `className="input"`, which styles the box but leaves the
+   browser's own "Choose File / No file chosen" control inside it — grey, squared,
+   and visibly from a different product than everything around it. It is the first
+   control an operator touches when preparing a payroll, so it is worth the ten
+   lines.
+
+   Styled here rather than rebuilt as a label-wrapped hidden input: the native
+   control already announces itself correctly, handles keyboard activation and
+   shows the chosen filename, and none of that survives being reimplemented.
+   --------------------------------------------------------------------------- */
+
+.input[type='file'] {
+  display: flex;
+  align-items: center;
+  padding: 0;
+  overflow: hidden;
+  color: var(--ink-secondary);
+  cursor: pointer;
+}
+
+.input[type='file']::file-selector-button {
+  margin-inline-end: var(--s3);
+  padding: var(--s2) var(--s4);
+  border: 0;
+  border-inline-end: 1px solid var(--hairline-strong);
+  background: var(--surface-sunken);
+  color: var(--ink);
+  font: inherit;
+  font-weight: 550;
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+
+.input[type='file']:hover::file-selector-button {
+  background: var(--accent-soft);
+  color: var(--accent-ink);
 }

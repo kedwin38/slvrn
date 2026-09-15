@@ -244,12 +244,24 @@ export function Modal({
   labelledBy,
   children,
   dismissible = true,
+  bleed = false,
 }: {
   open: boolean;
   onClose: () => void;
   labelledBy: string;
   children: ReactNode;
   dismissible?: boolean;
+  /**
+   * Remove the dialog's own padding, for content that supplies its own edge-to-edge bands.
+   *
+   * The default is padding, because the opposite default was wrong everywhere it was used.
+   * The dialog originally had none, on the reasoning that the release ceremony paints its
+   * own full-width header, amount panel and footer — true for that one caller, and every
+   * other dialog in the console inherited it. The credentials form, the batch detail and
+   * the new-batch form all rendered their labels and inputs flush against the border, which
+   * reads as an unstyled form on the screen an administrator uses to connect M-PESA.
+   */
+  bleed?: boolean;
 }) {
   const container = useRef<HTMLDivElement>(null);
   const previouslyFocused = useRef<HTMLElement | null>(null);
@@ -343,7 +355,7 @@ export function Modal({
       }}
     >
       <div
-        className="ceremony"
+        className={bleed ? 'ceremony ceremony-bleed' : 'ceremony'}
         role="dialog"
         aria-modal="true"
         aria-labelledby={labelledBy}
