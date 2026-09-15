@@ -617,6 +617,24 @@ authRoutes.get('/session', requireAuth, async (c) => {
       webauthnVerified: actor.webauthnVerifiedAt !== null,
       trustedDeviceId: actor.trustedDeviceId,
     },
+    /*
+     * Which deployment this is, and whether it can move real money.
+     *
+     * Nothing in the console said. An operator working in a sandbox deployment and one
+     * working in production saw an identical screen, which is an unacceptable ambiguity in
+     * a product whose whole purpose is disbursing funds: the mistake it invites is either
+     * rehearsing against real money or releasing a real payroll into a sandbox and
+     * believing it went out.
+     *
+     * `darajaEnvironment` is the one that actually decides, since a production deployment
+     * pointed at the sandbox still pays nobody.
+     */
+    deployment: {
+      environment: c.env.ENVIRONMENT,
+      darajaEnvironment: c.env.DARAJA_ENVIRONMENT ?? 'sandbox',
+      movesRealMoney:
+        c.env.ENVIRONMENT === 'production' && c.env.DARAJA_ENVIRONMENT === 'production',
+    },
     // The UI renders from this. It is a convenience, not a control: every endpoint
     // re-checks server-side (spec 4, HARD CONTROL).
     capabilities: capabilitiesFor(toActor(actor)),

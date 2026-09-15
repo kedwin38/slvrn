@@ -13,6 +13,24 @@ import { useState } from 'react';
 import { api, ApiError, setSessionToken, type SessionResponse } from '../lib/api.js';
 import { Notice, Field } from '../components/primitives.js';
 
+/*
+ * The heading changes with the stage so the screen always answers "what am I being asked
+ * for?" without the user inferring it from which fields happen to be visible.
+ */
+const title = {
+  credentials: 'Sign in',
+  webauthn: 'Confirm it is you',
+  enrol: 'Enrol a security key',
+  recover: 'Recover your account',
+} as const;
+
+const subtitle = {
+  credentials: 'Your password, then your security key.',
+  webauthn: 'Your password was accepted. Complete the prompt from your security key.',
+  enrol: 'Register the key this account will sign in with.',
+  recover: 'Use a recovery code you already hold.',
+} as const;
+
 export function Login({
   onAuthenticated,
 }: {
@@ -98,42 +116,64 @@ export function Login({
   }
 
   return (
-    <div
-      style={{
-        minHeight: '100dvh',
-        display: 'grid',
-        placeItems: 'center',
-        padding: 'var(--s4)',
-        background: 'var(--ground)',
-      }}
-    >
-      <main className="card" style={{ width: 'min(420px, 100%)' }}>
-        <div className="card-body" style={{ display: 'grid', gap: 'var(--s5)' }}>
-          <div>
-            <div className="brand" style={{ paddingInline: 0 }}>
-              <svg className="brand-mark" viewBox="0 0 32 32" aria-hidden="true">
-                <rect x="1" y="1" width="30" height="30" rx="8" fill="var(--accent)" />
-                <path
-                  d="M10 20.5 L16 12.5 L22 20.5"
-                  fill="none"
-                  stroke="var(--ink-inverse)"
-                  strokeWidth="2.4"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-                <path
-                  d="M10 25 L22 25"
-                  stroke="var(--ink-inverse)"
-                  strokeWidth="2.4"
-                  strokeLinecap="round"
-                  opacity="0.55"
-                />
-              </svg>
+    /*
+     * Two panels: what this is on the left, the credential form on the right.
+     *
+     * The sign-in screen was a bare card floating in an empty field — the product's first
+     * impression, and the one screen a prospective customer sees before anything else. A
+     * payments platform asking a finance director for a password owes them some account of
+     * what it is and why the sign-in is unusually strict, or the WebAuthn prompt that
+     * follows reads as an obstacle rather than the point.
+     *
+     * The narrative panel is hidden below 900px rather than stacked: on a phone it would
+     * push the form itself below the fold, and somebody signing in on a phone already knows
+     * what they came for.
+     */
+    <div className="auth">
+      <aside className="auth-aside" aria-hidden="true">
+        <div className="auth-aside-inner">
+          <div className="auth-aside-mark">
+            <BrandMark />
+            <div>
+              <div className="brand-name">SOLVAREN</div>
+              <div className="brand-tagline">Move money with certainty</div>
+            </div>
+          </div>
+
+          <p className="auth-lede">
+            A control plane for business disbursement — preparation, finance review and executive
+            authorization kept deliberately separate.
+          </p>
+
+          <ul className="auth-points">
+            <li>
+              <strong>No single action releases money.</strong> Preparing, approving and authorizing
+              a payment are three people, enforced by the server.
+            </li>
+            <li>
+              <strong>Every payment is accounted for.</strong> Outcomes are reconciled against
+              M-PESA, and no failure is left without a reason.
+            </li>
+            <li>
+              <strong>The record cannot be edited.</strong> The audit trail is hash-chained;
+              altering history breaks the chain.
+            </li>
+          </ul>
+        </div>
+      </aside>
+
+      <main className="auth-panel">
+        <div className="auth-form">
+          <div className="auth-form-head">
+            <div className="brand auth-brand">
+              <BrandMark />
               <div>
                 <div className="brand-name">SOLVAREN</div>
                 <div className="brand-tagline">Move money with certainty</div>
               </div>
             </div>
+            <h1 className="auth-title">{title[stage]}</h1>
+            <p className="auth-subtitle">{subtitle[stage]}</p>
           </div>
 
           {error && (
@@ -182,30 +222,36 @@ export function Login({
                 {busy ? 'Checking…' : 'Continue'}
               </button>
 
-              <button
-                className="button"
-                data-variant="ghost"
-                type="button"
-                onClick={() => {
-                  setStage('enrol');
-                  setError(null);
-                  setEnrolled(false);
-                }}
-              >
-                Enrol a security key
-              </button>
-
-              <button
-                className="button"
-                data-variant="ghost"
-                type="button"
-                onClick={() => {
-                  setStage('recover');
-                  setError(null);
-                }}
-              >
-                Use a recovery code
-              </button>
+              {/*
+               * Enrolment and recovery are rare, deliberate acts — not alternatives to
+               * signing in. As full-width ghost buttons they carried the same visual
+               * weight as Continue and read as headings; as links below a rule they stay
+               * findable without competing with the thing almost everyone came to do.
+               */}
+              <div className="auth-alt">
+                <button
+                  className="linkish"
+                  type="button"
+                  onClick={() => {
+                    setStage('enrol');
+                    setError(null);
+                    setEnrolled(false);
+                  }}
+                >
+                  Enrol a security key
+                </button>
+                <span className="auth-alt-sep" aria-hidden="true" />
+                <button
+                  className="linkish"
+                  type="button"
+                  onClick={() => {
+                    setStage('recover');
+                    setError(null);
+                  }}
+                >
+                  Use a recovery code
+                </button>
+              </div>
             </form>
           ) : stage === 'recover' ? (
             <Recover onDone={() => setStage('credentials')} />
@@ -301,6 +347,34 @@ export function Login({
         </div>
       </main>
     </div>
+  );
+}
+
+/**
+ * The SOLVAREN mark. Duplicated from the app shell rather than shared: sign-in is the one
+ * screen that renders before any of the authenticated chrome, and a shared import would
+ * pull the shell's module graph into the unauthenticated bundle for one SVG.
+ */
+function BrandMark() {
+  return (
+    <svg className="brand-mark" viewBox="0 0 32 32" role="img" aria-label="SOLVAREN">
+      <rect x="1" y="1" width="30" height="30" rx="8" fill="var(--accent)" />
+      <path
+        d="M10 20.5 L16 12.5 L22 20.5"
+        fill="none"
+        stroke="var(--ink-inverse)"
+        strokeWidth="2.4"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M10 25 L22 25"
+        stroke="var(--ink-inverse)"
+        strokeWidth="2.4"
+        strokeLinecap="round"
+        opacity="0.55"
+      />
+    </svg>
   );
 }
 

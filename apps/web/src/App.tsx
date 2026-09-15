@@ -30,6 +30,9 @@ import { ReportsPage } from './pages/Reports.js';
 import { IntelligencePage } from './pages/Intelligence.js';
 import { ActionQueue } from './components/ActionQueue.js';
 import { StepUpGate } from './components/StepUp.js';
+import { NAV_ICONS, type IconProps } from './components/icons.js';
+import { EnvironmentBadge } from './components/EnvironmentBadge.js';
+import { AccountMenu } from './components/AccountMenu.js';
 import { Notice } from './components/primitives.js';
 
 type Route =
@@ -51,101 +54,100 @@ type Route =
 interface NavEntry {
   route: Route;
   label: string;
-  icon: string;
   /** Rendered only when the actor holds this capability. */
   requires?: string;
   group: 'Operations' | 'Administration' | 'Account';
 }
 
 const NAVIGATION: NavEntry[] = [
-  { route: 'dashboard', label: 'Dashboard', icon: '◫', group: 'Operations' },
+  { route: 'dashboard', label: 'Dashboard', group: 'Operations' },
   {
     route: 'batches',
     label: 'Payment batches',
-    icon: '▤',
     requires: 'batch:read',
     group: 'Operations',
   },
   {
     route: 'transactions',
     label: 'Transactions',
-    icon: '⇄',
     requires: 'transactions:read',
     group: 'Operations',
   },
   {
     route: 'reconciliation',
     label: 'Reconciliation',
-    icon: '⟳',
     requires: 'reconciliation:read',
     group: 'Operations',
   },
   {
     route: 'recipients',
     label: 'Recipients',
-    icon: '☷',
     requires: 'recipients:read',
     group: 'Operations',
   },
   {
     route: 'intelligence',
     label: 'Intelligence',
-    icon: '◈',
     requires: 'ai:batch_analysis',
     group: 'Operations',
   },
   {
     route: 'reports',
     label: 'Reports',
-    icon: '▦',
     requires: 'reports:operational',
     group: 'Operations',
   },
   {
     route: 'members',
     label: 'Members',
-    icon: '☰',
     requires: 'admin:users',
     group: 'Administration',
   },
   {
     route: 'daraja',
     label: 'M-PESA credentials',
-    icon: '⚿',
     requires: 'admin:daraja',
     group: 'Administration',
   },
   {
     route: 'policy',
     label: 'Policy',
-    icon: '⚖',
     requires: 'admin:policies',
     group: 'Administration',
   },
   {
     route: 'security-centre',
     label: 'Security centre',
-    icon: '◎',
     requires: 'admin:security',
     group: 'Administration',
   },
   {
     route: 'audit',
     label: 'Audit trail',
-    icon: '✇',
     requires: 'audit:read_org',
     group: 'Administration',
   },
   {
     route: 'backups',
     label: 'Backups',
-    icon: '⛃',
     requires: 'admin:backups',
     group: 'Administration',
   },
   // Everyone has their own credentials to manage, so this carries no capability gate.
-  { route: 'security', label: 'Security', icon: '⛨', group: 'Account' },
+  { route: 'security', label: 'Security', group: 'Account' },
 ];
+
+/*
+ * Icons live in their own module, which cannot import Route from here without a cycle. This
+ * annotation closes the loop from this side: adding a Route without drawing its icon fails
+ * to type-check, so a route can never ship with a missing glyph.
+ */
+const ROUTE_ICONS: Record<Route, (props: IconProps) => JSX.Element> = NAV_ICONS;
+
+function NavIcon({ route }: { route: Route }) {
+  const Icon = ROUTE_ICONS[route];
+  return <Icon />;
+}
 
 export function App() {
   const [session, setSession] = useState<SessionResponse | null>(null);
@@ -227,9 +229,7 @@ export function App() {
                       navigate(entry.route);
                     }}
                   >
-                    <span className="nav-item-icon" aria-hidden="true">
-                      {entry.icon}
-                    </span>
+                    <NavIcon route={entry.route} />
                     {entry.label}
                   </button>
                 ))}
@@ -238,80 +238,103 @@ export function App() {
           })}
         </div>
 
-        <div style={{ marginBlockStart: 'auto', paddingInline: 'var(--s2)' }}>
-          <div className="small strong">{user.fullName}</div>
-          <div className="small muted">{LEVEL_TITLES[user.level]}</div>
-          <div className="small muted">{user.organizationSlug}</div>
-          <button
-            className="button button-sm"
-            data-variant="ghost"
-            onClick={signOut}
-            style={{ marginBlockStart: 'var(--s3)' }}
-          >
-            Sign out
-          </button>
+        {/*
+          The organisation, at the foot of the nav. Who you are signed in AS now lives in
+          the top bar with the sign-out, because identity and authority belong beside the
+          environment badge — those three answer one question together: what can I do here,
+          and does it move real money.
+        */}
+        <div className="sidebar-foot">
+          <div className="org-name">{user.organizationSlug}</div>
+          <div className="org-note">Payment control plane</div>
         </div>
       </nav>
 
       {/* Rendered once, above every route: any protected action can raise it. */}
       <StepUpGate />
 
-      <main className="main" id="main-content" tabIndex={-1}>
-        {banner && (
-          <div style={{ marginBlockEnd: 'var(--s4)' }}>
-            <Notice tone={banner.tone} live="polite">
-              {banner.message}
-            </Notice>
+      <div className="content">
+        <header className="topbar">
+          <div className="topbar-context">
+            <span className="topbar-crumb">
+              {visible.find((entry) => entry.route === route)?.group ?? 'Operations'}
+            </span>
+            <span className="topbar-sep" aria-hidden="true">
+              /
+            </span>
+            <span className="topbar-page">
+              {visible.find((entry) => entry.route === route)?.label ?? 'Dashboard'}
+            </span>
           </div>
-        )}
 
-        <ActionQueue onOpen={(next) => navigate(next as Route)} />
+          <div className="topbar-actions">
+            <EnvironmentBadge deployment={session.deployment} />
+            <AccountMenu
+              fullName={user.fullName}
+              levelTitle={LEVEL_TITLES[user.level]}
+              email={user.email}
+              onSignOut={signOut}
+            />
+          </div>
+        </header>
 
-        {route === 'dashboard' && (
-          <Dashboard
-            capabilities={capabilities}
-            level={user.level}
-            fullName={user.fullName}
-            onDrillDown={drillDown}
-          />
-        )}
+        <main className="main" id="main-content" tabIndex={-1}>
+          {banner && (
+            <div style={{ marginBlockEnd: 'var(--s4)' }}>
+              <Notice tone={banner.tone} live="polite">
+                {banner.message}
+              </Notice>
+            </div>
+          )}
 
-        {route === 'transactions' && (
-          <TransactionsExplorer
-            capabilities={capabilities}
-            initialStatuses={explorerFilter.statuses}
-            initialBatchId={explorerFilter.batchId}
-          />
-        )}
+          <ActionQueue onOpen={(next) => navigate(next as Route)} />
 
-        {route === 'batches' && (
-          <BatchesPage
-            capabilities={capabilities}
-            onReleased={(summary) =>
-              setBanner({
-                tone: 'success',
-                message: `${summary.batchReference} released. ${summary.message}`,
-              })
-            }
-            onViewTransactions={(batchId) => {
-              setExplorerFilter({ batchId });
-              navigate('transactions');
-            }}
-          />
-        )}
+          {route === 'dashboard' && (
+            <Dashboard
+              capabilities={capabilities}
+              level={user.level}
+              fullName={user.fullName}
+              onDrillDown={drillDown}
+            />
+          )}
 
-        {route === 'reconciliation' && <ReconciliationPage capabilities={capabilities} />}
-        {route === 'recipients' && <RecipientsPage capabilities={capabilities} />}
-        {route === 'reports' && <ReportsPage />}
-        {route === 'intelligence' && <IntelligencePage capabilities={capabilities} />}
-        {route === 'security-centre' && <SecurityCentrePage />}
-        {route === 'backups' && <BackupsPage />}
-        {route === 'members' && <UsersPage />}
-        {route === 'daraja' && <DarajaCredentialsPage />}
-        {route === 'policy' && <PolicySettingsPage />}
-        {route === 'audit' && <AuditLogPage />}
-        {route === 'security' && <SecuritySettingsPage session={session} />}
-      </main>
+          {route === 'transactions' && (
+            <TransactionsExplorer
+              capabilities={capabilities}
+              initialStatuses={explorerFilter.statuses}
+              initialBatchId={explorerFilter.batchId}
+            />
+          )}
+
+          {route === 'batches' && (
+            <BatchesPage
+              capabilities={capabilities}
+              onReleased={(summary) =>
+                setBanner({
+                  tone: 'success',
+                  message: `${summary.batchReference} released. ${summary.message}`,
+                })
+              }
+              onViewTransactions={(batchId) => {
+                setExplorerFilter({ batchId });
+                navigate('transactions');
+              }}
+            />
+          )}
+
+          {route === 'reconciliation' && <ReconciliationPage capabilities={capabilities} />}
+          {route === 'recipients' && <RecipientsPage capabilities={capabilities} />}
+          {route === 'reports' && <ReportsPage />}
+          {route === 'intelligence' && <IntelligencePage capabilities={capabilities} />}
+          {route === 'security-centre' && <SecurityCentrePage />}
+          {route === 'backups' && <BackupsPage />}
+          {route === 'members' && <UsersPage />}
+          {route === 'daraja' && <DarajaCredentialsPage />}
+          {route === 'policy' && <PolicySettingsPage />}
+          {route === 'audit' && <AuditLogPage />}
+          {route === 'security' && <SecuritySettingsPage session={session} />}
+        </main>
+      </div>
     </div>
   );
 }

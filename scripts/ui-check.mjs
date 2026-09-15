@@ -60,6 +60,11 @@ const server = createServer((req, res) => {
             webauthnVerified: true,
             trustedDeviceId: 'd1',
           },
+          deployment: {
+            environment: 'staging',
+            darajaEnvironment: 'sandbox',
+            movesRealMoney: false,
+          },
           capabilities: {
             'transactions:read': true,
             'transactions:export_failed': true,

@@ -1381,3 +1381,477 @@ textarea {
 .mt-4 {
   margin-block-start: var(--s4);
 }
+
+/* ---------------------------------------------------------------------------
+   Application chrome — top bar, environment, account
+   --------------------------------------------------------------------------- */
+
+.content {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/*
+ * The top bar answers, at a glance and on every screen: where am I, what may I do, and
+ * does this deployment move real money. It is sticky because the last of those three must
+ * not scroll away from somebody half-way down a batch they are about to release.
+ */
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s4);
+  padding: var(--s3) var(--s6);
+  min-height: 56px;
+  background: color-mix(in oklab, var(--surface) 88%, transparent);
+  backdrop-filter: saturate(1.4) blur(10px);
+  border-block-end: 1px solid var(--hairline);
+}
+
+@media (max-width: 700px) {
+  .topbar {
+    padding-inline: var(--s4);
+  }
+}
+
+.topbar-context {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s2);
+  min-width: 0;
+}
+
+.topbar-crumb {
+  font-size: var(--text-xs);
+  color: var(--ink-tertiary);
+  letter-spacing: 0.02em;
+}
+
+.topbar-sep {
+  color: var(--hairline-strong);
+}
+
+.topbar-page {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  flex: none;
+}
+
+/* ---- Environment ---- */
+
+.env-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s2);
+  padding: 4px var(--s3);
+  border-radius: var(--radius-full);
+  font-size: var(--text-2xs);
+  font-weight: 620;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  border: 1px solid transparent;
+  cursor: default;
+}
+
+.env-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: currentColor;
+  flex: none;
+}
+
+/*
+ * Deliberately quiet when live and louder when not. The dangerous confusion is believing a
+ * test deployment is real, so the test state is the one that has to interrupt; a permanent
+ * red banner on production would be ignored within a week.
+ */
+.env-badge[data-env='live'] {
+  background: var(--success-soft);
+  border-color: var(--success-border);
+  color: var(--success);
+}
+
+.env-badge[data-env='test'] {
+  background: var(--warning-soft);
+  border-color: var(--warning-border);
+  color: var(--warning);
+}
+
+/* ---- Account ---- */
+
+.account {
+  position: relative;
+}
+
+.account-trigger {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  padding: 4px var(--s2) 4px 4px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-full);
+  background: none;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease;
+}
+
+.account-trigger:hover {
+  background: var(--surface-sunken);
+  border-color: var(--hairline);
+}
+
+.avatar {
+  width: 28px;
+  height: 28px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-full);
+  background: var(--accent);
+  color: var(--ink-inverse);
+  font-size: var(--text-2xs);
+  font-weight: 650;
+  letter-spacing: 0.02em;
+}
+
+.account-who {
+  display: none;
+  flex-direction: column;
+  align-items: flex-start;
+  line-height: 1.2;
+}
+
+/* The name and level are a nicety; below this width the avatar alone carries it. */
+@media (min-width: 820px) {
+  .account-who {
+    display: flex;
+  }
+}
+
+.account-name {
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+
+.account-level {
+  font-size: var(--text-2xs);
+  color: var(--ink-tertiary);
+}
+
+.account-caret {
+  color: var(--ink-tertiary);
+  flex: none;
+}
+
+.account-menu {
+  position: absolute;
+  inset-inline-end: 0;
+  inset-block-start: calc(100% + var(--s2));
+  min-width: 15rem;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+  z-index: 30;
+}
+
+.account-menu-head {
+  padding: var(--s3) var(--s4);
+  border-block-end: 1px solid var(--hairline);
+}
+
+.account-menu-item {
+  display: block;
+  width: 100%;
+  padding: var(--s3) var(--s4);
+  border: 0;
+  background: none;
+  text-align: start;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.account-menu-item:hover {
+  background: var(--surface-sunken);
+}
+
+/* ---- Sidebar foot ---- */
+
+.sidebar-foot {
+  margin-block-start: auto;
+  padding: var(--s3) var(--s2) 0;
+  border-block-start: 1px solid var(--hairline);
+}
+
+.org-name {
+  font-size: var(--text-xs);
+  font-weight: 620;
+  letter-spacing: -0.005em;
+}
+
+.org-note {
+  font-size: var(--text-2xs);
+  color: var(--ink-tertiary);
+}
+
+/* ---- Navigation icons ---- */
+
+.icon {
+  flex: none;
+  color: var(--ink-tertiary);
+  transition: color 120ms ease;
+}
+
+.nav-item:hover .icon,
+.nav-item[aria-current='page'] .icon {
+  color: currentColor;
+}
+
+/* The top bar already owns the vertical rhythm, so the page need not repeat it. */
+.content > .main {
+  padding-block-start: var(--s5);
+}
+
+/* ---------------------------------------------------------------------------
+   Sign-in
+
+   The one screen seen before anything else, and previously the weakest: a bare
+   card floating in an empty field. A payments platform asking a finance director
+   for a password owes them some account of what it is — otherwise the WebAuthn
+   prompt that follows reads as an obstacle rather than as the product's point.
+
+   Two panels. The narrative is hidden rather than stacked below 900px: on a phone
+   it would push the form under the fold, and somebody signing in on a phone
+   already knows what they came for.
+   --------------------------------------------------------------------------- */
+
+.auth {
+  min-height: 100vh;
+  min-height: 100dvh;
+  display: grid;
+  grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
+  background: var(--ground);
+}
+
+/*
+ * The panel is deep indigo in BOTH themes, so its colours are literals rather than
+ * theme tokens. Built from --accent it inverted in the dark theme (the accent lightens,
+ * --ink-inverse darkens) and the copy came out dark-on-light — unreadable. Shadowing
+ * --ink-inverse here rather than setting `color` means the inline brand mark, which draws
+ * its chevron with that token, stays white too.
+ */
+.auth-aside {
+  --ink-inverse: oklch(99% 0 0);
+
+  position: relative;
+  display: flex;
+  align-items: center;
+  padding: var(--s10) clamp(var(--s6), 6vw, var(--s16));
+  color: var(--ink-inverse);
+  background:
+    radial-gradient(120% 90% at 12% 0%, oklch(42% 0.138 268 / 0.9) 0%, transparent 62%),
+    linear-gradient(152deg, oklch(45% 0.152 268) 0%, oklch(26% 0.106 272) 100%);
+  overflow: hidden;
+}
+
+/* A faint hairline grid — a ledger, read at a distance, not a decoration that
+   competes with the copy. */
+.auth-aside::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(var(--ink-inverse) 1px, transparent 1px),
+    linear-gradient(90deg, var(--ink-inverse) 1px, transparent 1px);
+  background-size: 64px 64px;
+  opacity: 0.045;
+  pointer-events: none;
+}
+
+.auth-aside-inner {
+  position: relative;
+  z-index: 1;
+  max-width: 46ch;
+}
+
+.auth-aside-mark {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  margin-block-end: var(--s8);
+}
+
+/* Inside the coloured panel the mark sits on the accent, so the plate has to go. */
+.auth-aside-mark .brand-mark rect {
+  fill: oklch(100% 0 0 / 0.14);
+}
+
+.auth-aside-mark .brand-name {
+  font-size: var(--text-lg);
+  color: var(--ink-inverse);
+}
+
+.auth-aside-mark .brand-tagline {
+  color: oklch(100% 0 0 / 0.68);
+}
+
+.auth-lede {
+  font-size: var(--text-xl);
+  line-height: 1.45;
+  letter-spacing: -0.015em;
+  font-weight: 420;
+  margin: 0 0 var(--s8);
+  color: oklch(100% 0 0 / 0.94);
+}
+
+.auth-points {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s5);
+}
+
+.auth-points li {
+  position: relative;
+  padding-inline-start: var(--s6);
+  font-size: var(--text-sm);
+  line-height: 1.6;
+  color: oklch(100% 0 0 / 0.78);
+}
+
+.auth-points li::before {
+  content: '';
+  position: absolute;
+  inset-inline-start: 0;
+  inset-block-start: 0.55em;
+  width: 7px;
+  height: 7px;
+  border-radius: 2px;
+  background: oklch(100% 0 0 / 0.5);
+}
+
+.auth-points strong {
+  display: block;
+  font-weight: 620;
+  color: var(--ink-inverse);
+}
+
+.auth-panel {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--s10) var(--s6);
+}
+
+.auth-form {
+  width: 100%;
+  max-width: 25rem;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s5);
+}
+
+.auth-form-head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+}
+
+.auth-brand {
+  padding-inline: 0;
+  margin-block-end: var(--s5);
+}
+
+.auth-title {
+  font-size: var(--text-2xl);
+  font-weight: 640;
+  letter-spacing: -0.03em;
+  margin: 0;
+}
+
+.auth-subtitle {
+  font-size: var(--text-sm);
+  color: var(--ink-secondary);
+  margin: 0;
+  line-height: 1.55;
+}
+
+/* Enrolment and recovery are rare, deliberate acts, not alternatives to signing
+   in. Below a rule and at link weight they stay findable without competing with
+   the button almost everyone came to press. */
+.auth-alt {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: var(--s3);
+  padding-block-start: var(--s4);
+  border-block-start: 1px solid var(--hairline);
+}
+
+.auth-alt-sep {
+  width: 1px;
+  height: 0.85em;
+  background: var(--hairline-strong);
+}
+
+.linkish {
+  appearance: none;
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  font-size: var(--text-sm);
+  color: var(--accent-ink);
+  font-weight: 540;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+
+.linkish:hover {
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
+}
+
+.linkish:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+@media (max-width: 900px) {
+  .auth {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .auth-aside {
+    display: none;
+  }
+
+  .auth-panel {
+    padding: var(--s8) var(--s5);
+    align-items: flex-start;
+  }
+}

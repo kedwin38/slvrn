@@ -417,6 +417,16 @@ export interface SessionResponse {
     trustedDeviceId: string | null;
   };
   capabilities: Record<Permission, boolean>;
+  /**
+   * Which deployment this is. Rendered persistently, because an operator who cannot tell a
+   * sandbox from production will eventually rehearse against real money — or release a real
+   * payroll into a sandbox and believe it went out.
+   */
+  deployment: {
+    environment: 'development' | 'staging' | 'production';
+    darajaEnvironment: 'sandbox' | 'production';
+    movesRealMoney: boolean;
+  };
 }
 
 export type TransactionStatus =
