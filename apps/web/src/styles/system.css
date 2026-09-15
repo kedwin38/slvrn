@@ -1429,10 +1429,25 @@ textarea {
   font-size: var(--text-xs);
   color: var(--ink-tertiary);
   letter-spacing: 0.02em;
+  /* The group is context; the page name is the answer. When space is short the page name
+     is what survives, so the group never shrinks it to an ellipsis. */
+  flex: none;
 }
 
 .topbar-sep {
   color: var(--hairline-strong);
+  flex: none;
+}
+
+/*
+ * On a phone the group and separator cost half the bar to say "Operations", while the page
+ * name — the half the reader needs — was squeezed to "Dash…". Drop the group there.
+ */
+@media (max-width: 700px) {
+  .topbar-crumb,
+  .topbar-sep {
+    display: none;
+  }
 }
 
 .topbar-page {
@@ -2093,5 +2108,99 @@ textarea {
      in-app routes, so it would print "(http://…/#/batches)" beside every one. */
   a[href]::after {
     content: none;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   Navigation drawer (narrow viewports only)
+
+   The sidebar used to stack above the content below 900px, so opening the console
+   on a phone presented a full screen of menu and the operator scrolled past every
+   route to reach the dashboard. Content comes first now; navigation is a tap away.
+
+   The wide layout is untouched: the toggle and the scrim are display:none above
+   the breakpoint, and the sidebar keeps its place in the grid.
+   --------------------------------------------------------------------------- */
+
+.nav-toggle,
+.nav-scrim {
+  display: none;
+}
+
+@media (max-width: 900px) {
+  .nav-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    /* 44px: the smallest target a thumb hits reliably (WCAG 2.2 target size). */
+    width: 44px;
+    height: 44px;
+    margin-inline-start: calc(var(--s2) * -1);
+    flex: none;
+    border: 1px solid transparent;
+    border-radius: var(--radius-md);
+    background: none;
+    color: var(--ink-secondary);
+    cursor: pointer;
+  }
+
+  .nav-toggle:hover {
+    background: var(--surface-sunken);
+    color: var(--ink);
+  }
+
+  .nav-toggle:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
+  .sidebar {
+    position: fixed;
+    inset-block: 0;
+    inset-inline-start: 0;
+    z-index: 40;
+    width: min(280px, 82vw);
+    height: 100dvh;
+    padding-block-start: calc(var(--s5) + env(safe-area-inset-top, 0px));
+    border-inline-end: 1px solid var(--hairline);
+    border-block-end: none;
+    box-shadow: var(--shadow-lg);
+    overflow-y: auto;
+    transform: translateX(-102%);
+    transition: transform 180ms ease;
+  }
+
+  .shell[data-nav-open='true'] .sidebar {
+    transform: translateX(0);
+  }
+
+  .nav-scrim {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 39;
+    border: 0;
+    padding: 0;
+    background: oklch(20% 0.02 258 / 0.42);
+    opacity: 0;
+    /* Hidden AND non-interactive when closed: an invisible scrim that still swallows
+       taps is worse than no scrim. */
+    visibility: hidden;
+    transition:
+      opacity 180ms ease,
+      visibility 180ms;
+  }
+
+  .shell[data-nav-open='true'] .nav-scrim {
+    opacity: 1;
+    visibility: visible;
+  }
+}
+
+/* Honour a reduced-motion preference: the drawer still opens, it just arrives. */
+@media (prefers-reduced-motion: reduce) {
+  .sidebar,
+  .nav-scrim {
+    transition: none;
   }
 }

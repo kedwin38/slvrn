@@ -743,6 +743,48 @@ await mpage.fill('input[type=password]', 'password1234');
 await mpage.click('button[type=submit]');
 await mpage.waitForSelector('.page-title');
 await mpage.screenshot({ path: `${SHOTS}/07-mobile-dashboard.png`, fullPage: false });
+
+/*
+ * The navigation must not be the first screen on a phone. Asserted by position rather than
+ * by a class name: what matters is that the page heading is visible without scrolling and
+ * that the nav is off-screen until asked for.
+ */
+const mobileNav = await mpage.evaluate(() => {
+  const title = document.querySelector('.page-title');
+  const sidebar = document.querySelector('.sidebar');
+  return {
+    titleTop: Math.round(title.getBoundingClientRect().top),
+    sidebarLeft: Math.round(sidebar.getBoundingClientRect().left),
+    viewport: window.innerHeight,
+  };
+});
+if (mobileNav.titleTop > mobileNav.viewport) {
+  errors.push(
+    `[mobile] the page heading is below the fold (${mobileNav.titleTop}px) — navigation is pushing content down`,
+  );
+}
+if (mobileNav.sidebarLeft >= 0) {
+  errors.push(`[mobile] the navigation drawer is not stowed (left ${mobileNav.sidebarLeft}px)`);
+}
+await mpage.click('.nav-toggle');
+await mpage.waitForTimeout(300);
+const opened = await mpage.evaluate(() =>
+  Math.round(document.querySelector('.sidebar').getBoundingClientRect().left),
+);
+if (opened !== 0) errors.push(`[mobile] the drawer did not open (left ${opened}px)`);
+await mpage.screenshot({ path: `${SHOTS}/07-mobile-nav-open.png`, fullPage: false });
+// Escape closes it, and the drawer closes itself once a route is chosen.
+await mpage.click('.nav-item >> text=Transactions');
+await mpage.waitForTimeout(300);
+const afterNavigate = await mpage.evaluate(() =>
+  Math.round(document.querySelector('.sidebar').getBoundingClientRect().left),
+);
+if (afterNavigate >= 0) {
+  errors.push(`[mobile] the drawer stayed open after navigating (left ${afterNavigate}px)`);
+}
+console.log(
+  `  mobile nav: heading at ${mobileNav.titleTop}px, drawer stowed at ${mobileNav.sidebarLeft}px, opens to ${opened}px, closes on navigate ${afterNavigate < 0 ? 'yes' : 'NO (BUG)'}`,
+);
 // Horizontal overflow is the classic mobile failure; assert it directly.
 const overflow = await mpage.evaluate(
   () => document.documentElement.scrollWidth > window.innerWidth + 1,

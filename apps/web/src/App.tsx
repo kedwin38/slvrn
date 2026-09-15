@@ -152,6 +152,14 @@ function NavIcon({ route }: { route: Route }) {
 export function App() {
   const [session, setSession] = useState<SessionResponse | null>(null);
   const [route, setRoute] = useState<Route>(readRoute());
+  /*
+   * The navigation drawer, on narrow viewports only.
+   *
+   * Below 900px the sidebar used to stack above the content, so opening the console on a
+   * phone showed a full screen of menu and the operator scrolled past every route to reach
+   * the dashboard. It is a drawer now: content first, navigation a tap away.
+   */
+  const [navOpen, setNavOpen] = useState(false);
   const [explorerFilter, setExplorerFilter] = useState<{ statuses?: TxnState[]; batchId?: string }>(
     {},
   );
@@ -168,10 +176,21 @@ export function App() {
   const navigate = useCallback((next: Route) => {
     window.location.hash = `#/${next}`;
     setRoute(next);
+    // Navigating is the drawer's whole purpose, so it closes itself on the way out.
+    setNavOpen(false);
     // Move focus to the main region so a keyboard user is not left at the nav item they
     // just activated, hunting for where the page went.
     document.getElementById('main-content')?.focus();
   }, []);
+
+  useEffect(() => {
+    if (!navOpen) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setNavOpen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [navOpen]);
 
   const drillDown = useCallback(
     (statuses: TxnState[]) => {
@@ -202,8 +221,17 @@ export function App() {
   const groups = ['Operations', 'Administration', 'Account'] as const;
 
   return (
-    <div className="shell">
-      <nav className="sidebar" aria-label="Main">
+    <div className="shell" data-nav-open={navOpen ? 'true' : undefined}>
+      {/* Catches the tap that means "not the menu, then". Inert on wide viewports. */}
+      <button
+        className="nav-scrim"
+        type="button"
+        tabIndex={-1}
+        aria-hidden="true"
+        onClick={() => setNavOpen(false)}
+      />
+
+      <nav className="sidebar" id="main-nav" aria-label="Main">
         <div className="brand">
           <BrandMark />
           <div>
@@ -255,6 +283,17 @@ export function App() {
 
       <div className="content">
         <header className="topbar">
+          <button
+            className="nav-toggle"
+            type="button"
+            aria-label={navOpen ? 'Close navigation' : 'Open navigation'}
+            aria-expanded={navOpen}
+            aria-controls="main-nav"
+            onClick={() => setNavOpen((open) => !open)}
+          >
+            <MenuIcon open={navOpen} />
+          </button>
+
           <div className="topbar-context">
             <span className="topbar-crumb">
               {visible.find((entry) => entry.route === route)?.group ?? 'Operations'}
@@ -351,6 +390,29 @@ function readRoute(): Route {
   const hash = window.location.hash.replace(/^#\//, '');
   const routes = NAVIGATION.map((entry) => entry.route);
   return routes.includes(hash as Route) ? (hash as Route) : 'dashboard';
+}
+
+/** Three rules, or a cross when the drawer is open — the state, not just the affordance. */
+function MenuIcon({ open }: { open: boolean }) {
+  return (
+    <svg className="icon" width={20} height={20} viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      {open ? (
+        <path
+          d="M6 6 L18 18 M18 6 L6 18"
+          stroke="currentColor"
+          strokeWidth="1.8"
+          strokeLinecap="round"
+        />
+      ) : (
+        <path
+          d="M4 7h16M4 12h16M4 17h16"
+          stroke="currentColor"
+          strokeWidth="1.8"
+          strokeLinecap="round"
+        />
+      )}
+    </svg>
+  );
 }
 
 /**
