@@ -61,6 +61,23 @@ describe('RBAC permission matrix (spec §4.4)', () => {
     expect(hasPermission(actor('L1'), 'payment:release')).toBe(false);
   });
 
+  it('L2 can prepare a batch end to end, exactly as L1 does', () => {
+    /*
+     * L2 held batch:create, batch:edit and batch:validate but not batch:submit_to_l2, so a
+     * Finance Control officer could upload a CSV and then had nowhere to send it: the batch
+     * sat in VALIDATED with no transition out of it. Preparation authority that cannot reach
+     * review is not authority. All four move together.
+     */
+    for (const p of [
+      'batch:create',
+      'batch:edit',
+      'batch:validate',
+      'batch:submit_to_l2',
+    ] as const) {
+      expect(hasPermission(actor('L2'), p)).toBe(true);
+    }
+  });
+
   it('L2 approves to L3 but cannot release, and L3 cannot perform the L2 approval step', () => {
     expect(hasPermission(actor('L2'), 'batch:approve_to_l3')).toBe(true);
     expect(hasPermission(actor('L2'), 'payment:release')).toBe(false);

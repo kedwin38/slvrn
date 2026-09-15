@@ -2539,7 +2539,72 @@ suite('HTTP routes', () => {
       // An L1 is never shown Approve — not shown it and refused, simply not shown it.
       expect(await commandsFor('L1')).toContain('VALIDATE');
       expect(await commandsFor('L1')).not.toContain('APPROVE_TO_L3');
-      expect(await commandsFor('L2')).not.toContain('SUBMIT_TO_L2');
+
+      // SUBMIT_TO_L2 is an edge out of VALIDATED, so a DRAFT offers it to nobody.
+      await call(`/batches/${batchId}/validate`, { level: 'L1', method: 'POST' });
+      // L2 prepares as well as reviews, so Submit is offered to them too. It used not to
+      // be, which left an L2-prepared batch stranded in VALIDATED with no way forward.
+      expect(await commandsFor('L2')).toContain('SUBMIT_TO_L2');
+    });
+
+    it('lets an L2 prepare and submit a batch, exactly as an L1 does', async () => {
+      const response = await call('/batches', {
+        level: 'L2',
+        method: 'POST',
+        body: { purpose: 'Lifecycle L2-PREPARED' },
+      });
+      expect(response.status).toBe(201);
+      const batchId = ((await response.json()) as { batchId: string }).batchId;
+
+      await addRows(batchId);
+      expect(
+        (await call(`/batches/${batchId}/validate`, { level: 'L2', method: 'POST' })).status,
+      ).toBe(200);
+      expect(
+        (await call(`/batches/${batchId}/submit`, { level: 'L2', method: 'POST' })).status,
+      ).toBe(200);
+
+      const submitted = (await (await call(`/batches/${batchId}`, { level: 'L2' })).json()) as {
+        batch: { state: string };
+      };
+      expect(submitted.batch.state).toBe('SUBMITTED_TO_L2');
+    });
+
+    it('still refuses the L2 who prepared a batch the right to approve it', async () => {
+      /*
+       * The control that makes the permission above safe to grant.
+       *
+       * Separation of duties is enforced per PERSON, not per level, so widening L2's
+       * preparation authority cannot collapse the two-person rule — but "cannot" is worth
+       * proving over HTTP rather than reasoning about, because this is the single assertion
+       * standing between one officer and a payment they originated and approved alone.
+       */
+      const response = await call('/batches', {
+        level: 'L2',
+        method: 'POST',
+        body: { purpose: 'Lifecycle L2-SELF-APPROVAL' },
+      });
+      const batchId = ((await response.json()) as { batchId: string }).batchId;
+
+      await addRows(batchId);
+      await call(`/batches/${batchId}/validate`, { level: 'L2', method: 'POST' });
+      await call(`/batches/${batchId}/submit`, { level: 'L2', method: 'POST' });
+
+      const approve = await call(`/batches/${batchId}/approve`, {
+        level: 'L2',
+        method: 'POST',
+        body: { reason: 'Approving my own work', acknowledgeFindings: true },
+      });
+      expect(approve.status).toBe(403);
+      expect(((await approve.json()) as { error: { code: string } }).error.code).toBe(
+        'SOD_SELF_APPROVAL',
+      );
+
+      // And the batch has not moved: a refused approval leaves it awaiting a second officer.
+      const after = (await (await call(`/batches/${batchId}`, { level: 'L2' })).json()) as {
+        batch: { state: string };
+      };
+      expect(after.batch.state).toBe('SUBMITTED_TO_L2');
     });
 
     it('carries a batch L1 -> L2 -> L3_READY, the chain that was unreachable', async () => {
@@ -2570,6 +2635,12 @@ suite('HTTP routes', () => {
       expect(ready.batch.availableCommands).toContain('BEGIN_AUTHORIZATION');
     });
 
+    /*
+     * Note this refuses at the PERMISSION gate, not the separation-of-duties one: an L1
+     * never holds batch:approve_to_l3, so the request never reaches assertNotSelfApproval.
+     * The SoD control itself is proved by the L2 test above, where the caller does hold the
+     * permission and is refused purely for having prepared the batch.
+     */
     it('refuses the L2 approval to the preparer, however the request is made', async () => {
       const batchId = await draft('SOD');
       await addRows(batchId);

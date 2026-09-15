@@ -111,6 +111,20 @@ const MATRIX: Record<AuthorityLevel, ReadonlySet<Permission>> = {
     'batch:create',
     'batch:edit',
     'batch:validate',
+    /*
+     * Finance Control prepares batches too, not only reviews them.
+     *
+     * L2 already held create, edit and validate, but not this, so an officer could upload a
+     * CSV and then had nowhere to send it — the batch sat in VALIDATED with no transition
+     * out. Preparation authority that cannot reach review is not authority.
+     *
+     * This does not weaken the two-person rule, which is enforced per PERSON and not per
+     * level: assertNotSelfApproval refuses an approver who created, edited or submitted the
+     * batch, so an L2 who prepares one still needs a different officer to approve it. What
+     * it removes is the assumption that Finance Control never originates work, which is not
+     * how a finance team of two or three people actually operates.
+     */
+    'batch:submit_to_l2',
     'batch:read',
     'batch:review',
     'batch:approve_to_l3',
